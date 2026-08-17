@@ -1,0 +1,25 @@
+# Dependencies and builds
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Environment and credentials
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# Logs and coverage
+*.log
+coverage/
+
+# Supabase local development
+supabase/.branches/
+supabase/.temp/

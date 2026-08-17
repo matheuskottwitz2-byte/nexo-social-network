@@ -1,0 +1,5 @@
+export const POST_MAX_LENGTH = 500
+export const COMMENT_MAX_LENGTH = 500
+export const PROFILE_NAME_MAX_LENGTH = 80
+export const PROFILE_BIO_MAX_LENGTH = 280
+export const USERNAME_MAX_LENGTH = 30
