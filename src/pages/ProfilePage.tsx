@@ -44,7 +44,7 @@ export function ProfilePage() {
     <main className="page-surface">
       <PageHeader title={profile.name} subtitle={`${profile.postsCount} ${profile.postsCount === 1 ? 'publicação' : 'publicações'}`} back />
       <section className="profile-hero">
-        <div className="profile-cover"><span /><span /><span /></div>
+        <div className="profile-cover" aria-hidden="true"><span /><span /><span /></div>
         <div className="profile-avatar-row">
           <Avatar name={profile.name} src={profile.avatarUrl} size="xl" />
           {isOwnProfile ? (
@@ -71,7 +71,7 @@ export function ProfilePage() {
       {postsQuery.isLoading && <FeedSkeleton />}
       {postsQuery.isError && <ErrorState onRetry={() => void postsQuery.refetch()} />}
       {postsQuery.data?.map((post) => <PostCard key={post.id} post={post} currentUserId={user!.id} />)}
-      {postsQuery.data?.length === 0 && <EmptyState title="Ainda sem publicações" description={isOwnProfile ? 'Sua próxima ideia pode começar uma ótima conversa.' : `${profile.name} ainda não publicou nada.`} />}
+      {postsQuery.data?.length === 0 && <EmptyState title="Ainda sem publicações" description={isOwnProfile ? 'Você ainda não publicou nada.' : `${profile.name} ainda não publicou nada.`} />}
     </main>
   )
 }

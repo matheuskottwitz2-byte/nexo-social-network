@@ -42,7 +42,7 @@ export function RegisterPage() {
   }
 
   return (
-    <AuthShell eyebrow="Comece agora" title="Crie seu espaço no Nexo" description="Leva menos de um minuto. Você poderá ajustar seu perfil depois.">
+    <AuthShell eyebrow="Novo perfil" title="Criar conta" description="Escolha como você quer aparecer por aqui.">
       <form className="auth-form two-column-form" onSubmit={handleSubmit(onSubmit)} noValidate>
         <div className="field-group full-field">
           <label htmlFor="name">Nome</label>
@@ -64,9 +64,9 @@ export function RegisterPage() {
           <div className="input-with-icon"><LockKeyhole aria-hidden="true" /><input id="password" type={showPassword ? 'text' : 'password'} autoComplete="new-password" placeholder="Mínimo de 8 caracteres" {...register('password')} /><button type="button" aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'} onClick={() => setShowPassword((value) => !value)}>{showPassword ? <EyeOff /> : <Eye />}</button></div>
           {errors.password && <span className="field-error">{errors.password.message}</span>}
         </div>
-        <Button type="submit" loading={isSubmitting} className="auth-submit full-field">Criar minha conta</Button>
+        <Button type="submit" loading={isSubmitting} className="auth-submit full-field">Criar conta</Button>
       </form>
-      <p className="auth-switch">Já faz parte? <Link to="/login">Entrar</Link></p>
+      <p className="auth-switch">Já tem uma conta? <Link to="/login">Entrar</Link></p>
     </AuthShell>
   )
 }

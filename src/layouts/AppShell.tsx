@@ -7,9 +7,9 @@ import {
   Moon,
   Search,
   Settings,
-  Sparkles,
   Sun,
   UserRound,
+  UsersRound,
   X,
 } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
@@ -99,18 +99,14 @@ export function AppShell() {
           <label className="sr-only" htmlFor="global-search">Buscar pessoas</label>
           <input id="global-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar no Nexo" />
         </form>
-        <section className="rail-card">
-          <div className="rail-card-header"><h2>Novos nexos</h2><Sparkles className="size-4" aria-hidden="true" /></div>
-          {suggestionsQuery.isLoading && <div className="rail-loading"><span /><span /><span /></div>}
-          {suggestionsQuery.data?.map((suggestion) => <ProfileResult key={suggestion.id} profile={suggestion} compact />)}
-          {!suggestionsQuery.isLoading && suggestionsQuery.data?.length === 0 && <p className="rail-empty">Novas pessoas aparecerão aqui.</p>}
-          <Link className="rail-link" to="/search">Ver mais pessoas</Link>
-        </section>
-        <section className="rail-card about-card">
-          <span className="eyebrow">Sobre o Nexo</span>
-          <h2>Ideias ganham força quando se encontram.</h2>
-          <p>Uma rede aberta para compartilhar, conversar e descobrir.</p>
-        </section>
+        {(suggestionsQuery.isLoading || Boolean(suggestionsQuery.data?.length)) && (
+          <section className="rail-card">
+            <div className="rail-card-header"><h2>Pessoas para conhecer</h2><UsersRound className="size-4" aria-hidden="true" /></div>
+            {suggestionsQuery.isLoading && <div className="rail-loading"><span /><span /><span /></div>}
+            {suggestionsQuery.data?.map((suggestion) => <ProfileResult key={suggestion.id} profile={suggestion} compact />)}
+            {Boolean(suggestionsQuery.data?.length) && <Link className="rail-link" to="/search">Explorar pessoas</Link>}
+          </section>
+        )}
         <footer className="rail-footer"><Link to="/settings/profile"><Settings className="size-3.5" /> Ajustes</Link><span>·</span><span>© 2026 Nexo</span></footer>
       </aside>
 

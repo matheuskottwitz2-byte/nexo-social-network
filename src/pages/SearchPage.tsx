@@ -28,7 +28,7 @@ export function SearchPage() {
 
   return (
     <main className="page-surface">
-      <PageHeader title="Explorar" subtitle="Encontre pessoas e novas perspectivas" />
+      <PageHeader title="Explorar" subtitle="Busque pessoas por nome ou usuário" />
       <form className="search-page-form" onSubmit={submit}>
         <Search aria-hidden="true" />
         <label className="sr-only" htmlFor="people-search">Pesquisar por nome ou usuário</label>
@@ -36,7 +36,7 @@ export function SearchPage() {
         {value && <button type="button" onClick={() => setValue('')} aria-label="Limpar busca"><X /></button>}
       </form>
       <section className="search-results" aria-live="polite">
-        {!query && <EmptyState icon={Search} title="Quem você quer encontrar?" description="Pesquise pelo nome ou nome de usuário de alguém." />}
+        {!query && <EmptyState icon={Search} title="Buscar pessoas" description="Digite um nome ou nome de usuário." />}
         {query && results.isLoading && <PageLoader label="Buscando pessoas" />}
         {results.isError && <ErrorState onRetry={() => void results.refetch()} />}
         {results.data && results.data.length > 0 && (

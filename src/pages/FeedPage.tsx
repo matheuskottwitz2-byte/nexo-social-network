@@ -15,7 +15,7 @@ export function FeedPage() {
 
   return (
     <main className="page-surface">
-      <PageHeader title="Seu Nexo" subtitle="Conversas e ideias em movimento" />
+      <PageHeader title="Início" />
       <div className="feed-tabs" role="tablist" aria-label="Tipo de feed">
         <button role="tab" aria-selected={mode === 'all'} className={mode === 'all' ? 'active' : ''} onClick={() => setMode('all')}><Sparkles /> Para você</button>
         <button role="tab" aria-selected={mode === 'following'} className={mode === 'following' ? 'active' : ''} onClick={() => setMode('following')}><UsersRound /> Seguindo</button>
@@ -28,8 +28,8 @@ export function FeedPage() {
         {feedQuery.data?.length === 0 && (
           <EmptyState
             icon={mode === 'following' ? UsersRound : Sparkles}
-            title={mode === 'following' ? 'Seu feed está pronto para crescer' : 'Seja a primeira voz por aqui'}
-            description={mode === 'following' ? 'Siga pessoas na busca e as publicações delas aparecerão aqui.' : 'Crie uma publicação para iniciar a conversa.'}
+            title={mode === 'following' ? 'Nenhuma publicação por aqui' : 'Ainda não há publicações'}
+            description={mode === 'following' ? 'Siga pessoas para ver as publicações delas neste feed.' : 'Publique algo para iniciar o feed.'}
           />
         )}
       </section>

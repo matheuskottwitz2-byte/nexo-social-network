@@ -9,13 +9,13 @@ export function AuthShell({ children, eyebrow, title, description }: { children:
         <div className="auth-visual-inner">
           <Link to="/" className="auth-logo"><NexoLogo size={44} /></Link>
           <div className="auth-quote">
-            <span className="eyebrow">Ideias encontram pessoas</span>
-            <h1>Conexões começam com uma boa conversa.</h1>
-            <p>Compartilhe o que importa, encontre novas perspectivas e construa seu próximo nexo.</p>
+            <span className="eyebrow">Rede social independente</span>
+            <h1>Ideias em comum. Pessoas por perto.</h1>
+            <p>Publique, acompanhe conversas e encontre gente interessante.</p>
           </div>
-          <div className="auth-proof" aria-hidden="true">
-            <div className="proof-avatars"><span>ML</span><span>AR</span><span>JS</span></div>
-            <p>Uma comunidade feita para conversas genuínas.</p>
+          <div className="auth-mark" aria-hidden="true">
+            <span />
+            <span />
           </div>
         </div>
       </section>

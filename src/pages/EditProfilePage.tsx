@@ -73,7 +73,7 @@ export function EditProfilePage() {
 
   return (
     <main className="page-surface">
-      <PageHeader title="Editar perfil" subtitle="Mostre às pessoas quem está por trás das ideias" back />
+      <PageHeader title="Editar perfil" subtitle="Atualize seus dados públicos" back />
       <form className="edit-profile-form" onSubmit={submit}>
         <section className="avatar-editor">
           <div className="avatar-preview">
@@ -94,7 +94,7 @@ export function EditProfilePage() {
         </div>
         <div className="field-group">
           <label htmlFor="profile-bio">Bio</label>
-          <textarea id="profile-bio" rows={5} value={bio} onChange={(event) => setBio(event.target.value)} maxLength={PROFILE_BIO_MAX_LENGTH} placeholder="Conte sobre você, seus interesses e o que pretende compartilhar." />
+          <textarea id="profile-bio" rows={5} value={bio} onChange={(event) => setBio(event.target.value)} maxLength={PROFILE_BIO_MAX_LENGTH} placeholder="Escreva uma breve apresentação." />
           <small>{bio.length}/{PROFILE_BIO_MAX_LENGTH}</small>
         </div>
         <div className="form-actions"><Button type="button" variant="secondary" onClick={() => navigate(-1)}>Cancelar</Button><Button type="submit" loading={mutation.isPending}><Save className="size-4" /> Salvar alterações</Button></div>

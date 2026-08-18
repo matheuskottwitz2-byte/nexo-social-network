@@ -35,7 +35,7 @@ export function PostComposer({ userId, profile }: { userId: string; profile?: Pr
           id="new-post"
           value={content}
           onChange={(event) => setContent(event.target.value)}
-          placeholder="O que conecta você hoje?"
+          placeholder="Escreva uma publicação…"
           rows={3}
           maxLength={POST_MAX_LENGTH + 1}
         />

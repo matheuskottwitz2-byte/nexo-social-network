@@ -1,4 +1,4 @@
-import { useId, type CSSProperties, type HTMLAttributes } from "react";
+import { type CSSProperties, type HTMLAttributes } from "react";
 
 export interface NexoLogoProps
   extends Omit<HTMLAttributes<HTMLSpanElement>, "children"> {
@@ -11,8 +11,8 @@ export interface NexoLogoProps
 }
 
 const wordmarkStyle: CSSProperties = {
-  fontFamily: 'Manrope, "DM Sans", ui-sans-serif, system-ui, sans-serif',
-  fontWeight: 750,
+  fontFamily: "Newsreader, Georgia, serif",
+  fontWeight: 600,
   letterSpacing: "-0.035em",
   lineHeight: 1,
 };
@@ -25,8 +25,6 @@ export function NexoLogo({
   style,
   ...props
 }: NexoLogoProps) {
-  const instanceId = useId().replace(/:/g, "");
-  const gradientId = `nexo-logo-gradient-${instanceId}`;
   const label = accessibleLabel ?? (showWordmark ? undefined : "Nexo");
   const cssSize = typeof size === "number" ? `${size}px` : size;
   const fontSize =
@@ -50,36 +48,23 @@ export function NexoLogo({
     >
       <svg
         aria-hidden="true"
+        className="nexo-logo-symbol"
         focusable="false"
         height={cssSize}
         viewBox="0 0 64 64"
         width={cssSize}
         xmlns="http://www.w3.org/2000/svg"
       >
-        <defs>
-          <linearGradient
-            id={gradientId}
-            x1="0"
-            x2="64"
-            y1="0"
-            y2="64"
-            gradientUnits="userSpaceOnUse"
-          >
-            <stop stopColor="#7C3AED" />
-            <stop offset="1" stopColor="#4C1D95" />
-          </linearGradient>
-        </defs>
-        <rect width="64" height="64" rx="18" fill={`url(#${gradientId})`} />
         <path
-          d="M18.5 43.5v-23l27 23v-23"
+          d="M14 46V22c0-5.5 6.7-8.2 10.6-4.3L50 43.1V18"
           fill="none"
-          stroke="#FFFDFB"
+          stroke="var(--brand, #35B5A5)"
           strokeLinecap="round"
           strokeLinejoin="round"
-          strokeWidth="6"
+          strokeWidth="5.5"
         />
-        <circle cx="18.5" cy="20.5" r="4.25" fill="#FB7185" />
-        <circle cx="45.5" cy="43.5" r="4.25" fill="#FB7185" />
+        <circle cx="14" cy="46" fill="var(--brand, #35B5A5)" r="3.75" />
+        <circle cx="50" cy="18" fill="var(--brand, #35B5A5)" r="3.75" />
       </svg>
 
       {showWordmark ? (

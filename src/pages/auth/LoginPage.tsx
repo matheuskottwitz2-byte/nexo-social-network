@@ -36,7 +36,7 @@ export function LoginPage() {
   }
 
   return (
-    <AuthShell eyebrow="Bem-vindo de volta" title="Entre na sua conta" description="Continue de onde parou e veja o que está acontecendo.">
+    <AuthShell eyebrow="Acesso" title="Entrar no Nexo" description="Use seu e-mail e senha.">
       <form className="auth-form" onSubmit={handleSubmit(onSubmit)} noValidate>
         <div className="field-group">
           <label htmlFor="email">E-mail</label>
@@ -50,7 +50,7 @@ export function LoginPage() {
         </div>
         <Button type="submit" loading={isSubmitting} className="auth-submit">Entrar</Button>
       </form>
-      <p className="auth-switch">Ainda não tem uma conta? <Link to="/register">Criar conta</Link></p>
+      <p className="auth-switch">Não tem uma conta? <Link to="/register">Criar conta</Link></p>
     </AuthShell>
   )
 }

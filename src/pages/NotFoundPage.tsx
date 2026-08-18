@@ -7,7 +7,7 @@ export function NotFoundPage() {
     <main className="not-found-page">
       <NexoLogo size={40} showWordmark={false} />
       <span>404</span>
-      <h1>Este caminho não criou um nexo.</h1>
+      <h1>Página não encontrada</h1>
       <p>A página pode ter mudado de endereço ou nunca ter existido.</p>
       <Link className="button button-primary" to="/"><Home className="size-4" /> Voltar ao início</Link>
       <Link to="/search"><Compass className="size-4" /> Explorar pessoas</Link>

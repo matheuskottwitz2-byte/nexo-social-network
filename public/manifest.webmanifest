@@ -1,16 +1,16 @@
 {
   "id": "/",
-  "name": "Nexo — conexões que importam",
+  "name": "Nexo",
   "short_name": "Nexo",
-  "description": "Uma rede social para compartilhar ideias e criar conexões.",
+  "description": "Rede social para compartilhar ideias e acompanhar pessoas.",
   "lang": "pt-BR",
   "dir": "ltr",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#F8F7FC",
-  "theme_color": "#6D4AFF",
+  "background_color": "#0E1111",
+  "theme_color": "#35B5A5",
   "categories": ["social", "lifestyle"],
   "icons": [
     {
