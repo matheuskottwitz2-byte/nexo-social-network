@@ -23,8 +23,10 @@ A aplicação é uma SPA instalável e oferece temas claro e escuro. O acesso ao
 
 - Cadastro, login, logout e restauração de sessão.
 - Rotas privadas protegidas.
-- Perfil público com bio e atividade.
-- Edição do próprio perfil e upload de avatar.
+- Perfil público com bio, atividade, avatar e capa personalizada.
+- Avatar com crop, reposicionamento e zoom de JPEG, PNG, WebP ou AVIF, gerando WebP quadrado; GIFs de avatar antigos continuam visíveis, mas novos não são aceitos.
+- Capa com crop 3:1 para imagens estáticas ou envio do GIF original, sem crop, para preservar a animação.
+- Seleção de avatar e capa por arquivo ou por botões explícitos de leitura da área de transferência.
 
 ### Plataforma
 
@@ -41,7 +43,7 @@ A aplicação é uma SPA instalável e oferece temas claro e escuro. O acesso ao
 | Interface | React 19, TypeScript, Vite e Tailwind CSS 4 |
 | Navegação e dados | React Router e TanStack Query |
 | Backend gerenciado | Supabase Auth, PostgreSQL, PostgREST/RPC e Storage |
-| Visualização e UI | Recharts e Lucide React |
+| Visualização e UI | Recharts, Lucide React e react-easy-crop |
 | PWA | vite-plugin-pwa e Workbox |
 
 Fluxo principal: `interface → hooks e cache → serviços tipados → Supabase`.
@@ -99,7 +101,7 @@ Requisitos: Node.js 20.19 ou superior, npm e um projeto Supabase.
    VITE_SUPABASE_PUBLISHABLE_KEY=SUA_PUBLISHABLE_KEY
    ```
 
-4. Aplique a migration [supabase/migrations/20260814000000_initial_schema.sql](supabase/migrations/20260814000000_initial_schema.sql) no projeto Supabase.
+4. Aplique, em ordem cronológica, as migrations disponíveis em [`supabase/migrations/`](supabase/migrations/) no projeto Supabase.
 
 5. Inicie a aplicação:
 
@@ -121,8 +123,6 @@ Esses comandos verificam estática, tipos e bundle local. Eles não substituem t
 
 ## Roadmap
 
-- Capa personalizada e evoluções do perfil.
-- Crop e reposicionamento de avatar.
 - Imagens em publicações.
 - Notificações, realtime e moderação.
 - Cobertura automatizada de unidade, integração e ponta a ponta.

@@ -49,7 +49,7 @@ Não. O guard impede acesso acidental pela interface e melhora a navegação. Um
 
 ### Por que existe uma tabela `profiles` se o Supabase já tem `auth.users`?
 
-`auth.users` é uma estrutura de autenticação e não deve ser usada como tabela pública de produto. `profiles` contém nome, username, bio e avatar, pode ser consultada conforme as policies públicas e mantém uma relação 1:1 com a identidade. O cliente só recebe grant para atualizar nome, bio e avatar; username fica imutável depois do cadastro.
+`auth.users` é uma estrutura de autenticação e não deve ser usada como tabela pública de produto. `profiles` contém nome, username, bio, avatar e capa, pode ser consultada conforme as policies públicas e mantém uma relação 1:1 com a identidade. O cliente só recebe grant para atualizar nome, bio, `avatar_url` e `cover_url`; username fica imutável depois do cadastro.
 
 ## Perguntas sobre Supabase e segurança
 
@@ -123,7 +123,7 @@ Contagens e séries são calculadas a partir das tabelas do usuário e das inter
 
 São estados distintos. Loading pode usar skeleton; uma consulta bem-sucedida sem linhas mostra uma ação contextual; falha mostra mensagem e possível retry; recurso inexistente mostra 404/não encontrado. Durante mutations, ações são bloqueadas quando a repetição seria problemática.
 
-## Perguntas sobre busca, avatar e PWA
+## Perguntas sobre busca, mídia de perfil e PWA
 
 ### Como a busca de usuários funciona?
 
@@ -131,7 +131,35 @@ O termo vem da query string, é sanitizado e enviado como filtro PostgREST para 
 
 ### Como funciona o upload de avatar?
 
-O arquivo vai para o bucket público `avatars`; o perfil guarda a URL pública. O primeiro diretório é o UUID autenticado, e as policies limitam insert/update/delete a essa pasta. A migration impõe 5 MB e aceita JPEG, PNG, WebP, GIF e AVIF. A versão atual cria um novo nome com timestamp e não remove automaticamente o avatar anterior; validação no cliente melhora o feedback, mas os limites do Storage e as policies são a garantia compartilhada.
+O arquivo final vai para o bucket público `avatars`; o perfil guarda somente a URL pública. O primeiro diretório é o UUID autenticado, e as policies limitam insert/update/delete a essa pasta. Novos uploads aceitam JPEG, PNG, WebP e AVIF até 5 MiB; todos passam pelo crop e geram WebP de 512 × 512. GIFs de avatar já armazenados continuam sendo exibidos, mas a interface e a configuração final do bucket recusam novos uploads desse tipo.
+
+### Como o crop de avatar e capa funciona?
+
+`react-easy-crop` administra posição, zoom e área selecionada. Na confirmação de uma imagem estática, o navegador desenha apenas essa região em canvas e gera um WebP otimizado: 512 × 512 para avatar e 1500 × 500, na proporção 3:1, para capa. Somente esse resultado é enviado ao Storage; cancelar o diálogo não inicia upload. Se o navegador não conseguir decodificar a origem ou codificar WebP, o editor informa o erro em vez de rotular outro formato incorretamente.
+
+### Como GIF é tratado em avatar e capa?
+
+Um fluxo simples de canvas trabalha com uma imagem estática e perderia os frames da animação. Por isso, GIF novo não é aceito como avatar; avatares GIF legados ainda aparecem porque suas URLs continuam válidas. Em capas, GIF é permitido até 8 MiB, recebe preview e confirmação e é enviado no formato original, sem crop ou conversão. Capas JPEG, PNG, WebP e AVIF continuam usando crop 3:1 e saída WebP.
+
+### Como funciona a seleção pela área de transferência?
+
+Há botões próprios para ler uma imagem copiada como avatar ou capa; a aplicação não monitora o clipboard silenciosamente. O clique chama a Clipboard API, extrai um item de imagem e o envia para a mesma validação e preparação do seletor de arquivos. A interface apresenta mensagens diferentes quando a API não é suportada, o acesso é negado ou não há imagem disponível. Suporte e permissão dependem do navegador e de um contexto seguro.
+
+### `prefers-reduced-motion` pausa GIF animado?
+
+Não. CSS pode reduzir animações e transições da interface, mas um GIF dentro de `<img>` continua sendo reproduzido pelo navegador. Pausá-lo exigiria processamento dos frames ou uma versão estática alternativa. Essa limitação vale para GIFs legados de avatar e para capas GIF nesta versão e deve ser explicada, não mascarada.
+
+### Como as capas são protegidas?
+
+O bucket público `covers` aceita JPEG, PNG, WebP, AVIF e GIF de até 8 MiB para leitura pública. Cada objeto fica em `<auth.uid()>/<arquivo>`, e as policies permitem insert, update e delete somente quando a pasta pertence à sessão. RLS permite alterar `cover_url` apenas no próprio perfil, e grants específicos mantêm `username`, `id` e timestamps fora do alcance do cliente.
+
+### Como a troca de mídia evita perder a imagem nova?
+
+A ordem é upload novo, atualização da URL no perfil e, por último, tentativa de excluir o arquivo antigo. Se a atualização do perfil falhar, o service tenta limpar o upload novo e então propaga o erro. Se apenas a limpeza antiga falhar, a imagem já aplicada é mantida e a interface apresenta um aviso, não uma mensagem enganosa de falha total. A remoção só alcança URLs reconhecidas como pertencentes ao projeto, ao bucket esperado e à pasta do próprio usuário. Na remoção da capa, a URL volta a `null` antes dessa limpeza best-effort do objeto anterior.
+
+### Por que alterar a capa não revalida o feed?
+
+TanStack Query invalida `current-profile` e perfis visitados em toda atualização. Avatar e nome também aparecem em feeds, post individual, comentários, posts do autor, busca e sugestões, então essas consultas são revalidadas quando um desses campos muda. Capa não aparece nesses conteúdos; quando somente ela muda, invalidar os feeds geraria tráfego sem mudar a interface.
 
 ### Como você transformou o site em PWA?
 
@@ -149,7 +177,7 @@ Não apenas reduzindo o desktop. O layout troca sidebar por navegação mobile, 
 
 ### Que cuidados de acessibilidade foram tomados?
 
-Inputs têm labels, ações usam elementos nativos, imagens têm texto alternativo e o CSS define foco visível. O diálogo de confirmação usa `alertdialog`, recebe foco inicial e fecha com Escape. Esta versão ainda não implementa focus trap/retorno de foco nem registra uma auditoria formal de contraste; esses pontos devem ser validados antes de produção.
+Inputs têm labels, ações usam elementos nativos, imagens têm texto alternativo e o CSS define foco visível. O diálogo de confirmação usa `alertdialog`, recebe foco inicial e fecha com Escape. O editor de imagem também possui título e descrição, contém o foco, devolve-o ao gatilho, fecha com Escape e permite reposicionar o crop com teclado depois de aplicar zoom. O diálogo de confirmação genérico ainda não possui focus trap/retorno de foco, e não há auditoria formal de contraste; esses pontos devem ser validados antes de produção.
 
 ### Qual foi o maior trade-off da primeira versão?
 
@@ -167,9 +195,11 @@ Meça antes de redesenhar. Possíveis passos incluem paginação por cursor, ín
 
 - Execute o projeto e refaça cadastro, login e logout.
 - Crie dois usuários e teste as fronteiras de RLS.
-- Leia a migration completa e explique cada constraint importante.
+- Leia as migrations completas e explique cada constraint importante.
 - Trace no código um post do formulário até a tabela.
 - Trace uma curtida da mutation, passando pelo cache, até a constraint única.
+- Trace uma troca de avatar do crop client-side até o Storage, a atualização de `profiles` e a limpeza posterior.
+- Explique por que GIF é recusado em novos avatares, preservado em capas e como o path pelo UUID participa da autorização.
 - Saiba onde a sessão é restaurada e onde a rota é protegida.
 - Confirme de onde vêm as métricas do dashboard.
 - Execute `npm run lint` e `npm run build` e entenda qualquer aviso.

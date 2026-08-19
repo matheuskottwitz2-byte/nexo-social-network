@@ -50,12 +50,19 @@ async function runSmokeTest() {
   const unauthorizedPostAsB = `[RLS smoke ${runId}] tentativa de A publicar como B`
   const temporaryPostByA = `[RLS smoke ${runId}] post temporário legítimo de A`
   const attemptedProfileName = `RLS_BLOCK_TEST_${runId.slice(0, 12)}`
+  const attemptedCoverForB = `https://example.invalid/nexo-rls-smoke/${runId}/cover-b.webp`
+  const temporaryCoverForA = `https://example.invalid/nexo-rls-smoke/${runId}/cover-a.webp`
 
   let userAId
   let userBId
+  let originalUserACoverUrl
   let originalUserBName
+  let originalUserBCoverUrl
   let temporaryPostByBId
   let temporaryPostByAId
+  let userACoverSnapshotCaptured = false
+  let userBCoverSnapshotCaptured = false
+  let ownCoverMutationAttempted = false
   let setupComplete = false
 
   function redact(value) {
@@ -126,7 +133,7 @@ async function runSmokeTest() {
 
     const ownProfile = await clientA
       .from('profiles')
-      .select('id, username, name')
+      .select('id, username, name, cover_url')
       .eq('id', userAId)
       .maybeSingle()
 
@@ -134,9 +141,14 @@ async function runSmokeTest() {
       detail: errorDetail(ownProfile.error, 'O perfil de A não foi encontrado.'),
     })
 
+    if (!ownProfile.error && ownProfile.data?.id === userAId) {
+      originalUserACoverUrl = ownProfile.data.cover_url
+      userACoverSnapshotCaptured = true
+    }
+
     const userBProfile = await clientB
       .from('profiles')
-      .select('id, name')
+      .select('id, name, cover_url')
       .eq('id', userBId)
       .maybeSingle()
 
@@ -147,6 +159,8 @@ async function runSmokeTest() {
       return
     }
     originalUserBName = userBProfile.data.name
+    originalUserBCoverUrl = userBProfile.data.cover_url
+    userBCoverSnapshotCaptured = true
 
     // Um post temporário de B evita testar DELETE contra uma publicação preexistente.
     const fixturePost = await clientB
@@ -244,6 +258,85 @@ async function runSmokeTest() {
       }
     }
 
+    const unauthorizedCoverUpdate = await clientA
+      .from('profiles')
+      .update({ cover_url: attemptedCoverForB })
+      .eq('id', userBId)
+      .select('id, cover_url')
+
+    const coverAfterUnauthorizedUpdate = await clientB
+      .from('profiles')
+      .select('id, cover_url')
+      .eq('id', userBId)
+      .maybeSingle()
+
+    const coverUpdateReturnedNoRows =
+      Array.isArray(unauthorizedCoverUpdate.data) && unauthorizedCoverUpdate.data.length === 0
+    const userBCoverIsIntact =
+      !coverAfterUnauthorizedUpdate.error &&
+      coverAfterUnauthorizedUpdate.data?.cover_url === originalUserBCoverUrl
+    const unauthorizedCoverUpdateWasBlocked =
+      userBCoverIsIntact &&
+      (coverUpdateReturnedNoRows || isExpectedAuthorizationError(unauthorizedCoverUpdate.error))
+
+    record(unauthorizedCoverUpdateWasBlocked, 'A NÃO conseguiu alterar a capa de B', {
+      security: true,
+      detail: unauthorizedCoverUpdateWasBlocked
+        ? undefined
+        : errorDetail(
+            unauthorizedCoverUpdate.error,
+            'UPDATE de cover_url afetou uma linha ou produziu um resultado inesperado.',
+          ),
+    })
+    record(userBCoverIsIntact, 'Capa original de B continua intacta', {
+      security: true,
+      detail: errorDetail(
+        coverAfterUnauthorizedUpdate.error,
+        'A capa de B foi alterada ou não pôde ser confirmada.',
+      ),
+    })
+
+    if (!userBCoverIsIntact && coverAfterUnauthorizedUpdate.data) {
+      const restoration = await restoreProfileCover(clientB, userBId, originalUserBCoverUrl)
+      if (restoration.restored) {
+        console.log('[INFO] Capa original de B foi restaurada após a tentativa controlada.')
+      }
+    }
+
+    if (userACoverSnapshotCaptured) {
+      ownCoverMutationAttempted = true
+
+      const legitimateCoverUpdate = await clientA
+        .from('profiles')
+        .update({ cover_url: temporaryCoverForA })
+        .eq('id', userAId)
+        .select('id, cover_url')
+
+      const ownCoverAfterUpdate = await clientA
+        .from('profiles')
+        .select('id, cover_url')
+        .eq('id', userAId)
+        .maybeSingle()
+
+      const ownCoverWasUpdated =
+        !legitimateCoverUpdate.error &&
+        legitimateCoverUpdate.data?.length === 1 &&
+        legitimateCoverUpdate.data[0]?.cover_url === temporaryCoverForA &&
+        !ownCoverAfterUpdate.error &&
+        ownCoverAfterUpdate.data?.cover_url === temporaryCoverForA
+
+      record(ownCoverWasUpdated, 'A conseguiu atualizar sua própria capa', {
+        detail: errorDetail(
+          legitimateCoverUpdate.error ?? ownCoverAfterUpdate.error,
+          'O UPDATE legítimo de cover_url não foi confirmado.',
+        ),
+      })
+    } else {
+      record(false, 'A conseguiu atualizar sua própria capa', {
+        detail: 'O valor original de cover_url de A não pôde ser registrado com segurança.',
+      })
+    }
+
     const unauthorizedInsert = await clientA
       .from('posts')
       .insert({ author_id: userBId, content: unauthorizedPostAsB })
@@ -302,6 +395,28 @@ async function runSmokeTest() {
     })
   } finally {
     console.log('[INFO] Iniciando limpeza dos dados temporários...')
+
+    if (userAId && userACoverSnapshotCaptured && ownCoverMutationAttempted) {
+      const restoration = await restoreProfileCover(clientA, userAId, originalUserACoverUrl)
+      if (!restoration.ok) {
+        record(false, 'CRÍTICO: não foi possível restaurar a capa original de A', {
+          detail: errorDetail(restoration.error, 'A restauração não alterou exatamente uma linha.'),
+        })
+      } else {
+        console.log('[INFO] Capa original de A foi confirmada ou restaurada durante a limpeza final.')
+      }
+    }
+
+    if (userBId && userBCoverSnapshotCaptured) {
+      const restoration = await restoreProfileCover(clientB, userBId, originalUserBCoverUrl)
+      if (!restoration.ok) {
+        record(false, 'CRÍTICO: não foi possível restaurar a capa original de B', {
+          detail: errorDetail(restoration.error, 'A restauração não alterou exatamente uma linha.'),
+        })
+      } else if (restoration.restored) {
+        console.log('[INFO] Capa original de B foi restaurada durante a limpeza final.')
+      }
+    }
 
     if (userBId && originalUserBName !== undefined) {
       const restoration = await restoreUserBName(clientB, userBId, originalUserBName)
@@ -396,6 +511,46 @@ async function restoreUserBName(clientB, userBId, originalName) {
       .select('id')
 
     if (restoration.error || restoration.data?.length !== 1) {
+      return {
+        ok: false,
+        restored: false,
+        error: restoration.error ?? new Error('A restauração não alterou exatamente uma linha.'),
+      }
+    }
+
+    return { ok: true, restored: true }
+  }
+
+  return { ok: true, restored: false }
+}
+
+async function restoreProfileCover(client, userId, originalCoverUrl) {
+  const currentProfile = await client
+    .from('profiles')
+    .select('cover_url')
+    .eq('id', userId)
+    .maybeSingle()
+
+  if (currentProfile.error || !currentProfile.data) {
+    return {
+      ok: false,
+      restored: false,
+      error: currentProfile.error ?? new Error('O perfil não foi encontrado durante a restauração.'),
+    }
+  }
+
+  if (currentProfile.data.cover_url !== originalCoverUrl) {
+    const restoration = await client
+      .from('profiles')
+      .update({ cover_url: originalCoverUrl })
+      .eq('id', userId)
+      .select('id, cover_url')
+
+    if (
+      restoration.error ||
+      restoration.data?.length !== 1 ||
+      restoration.data[0]?.cover_url !== originalCoverUrl
+    ) {
       return {
         ok: false,
         restored: false,

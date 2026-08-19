@@ -7,6 +7,7 @@ export interface ProfileSummary {
 
 export interface Profile extends ProfileSummary {
   bio: string
+  coverUrl: string | null
   createdAt: string
   followersCount: number
   followingCount: number

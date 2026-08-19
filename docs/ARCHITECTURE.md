@@ -1,6 +1,6 @@
 # Arquitetura do Nexo
 
-Este documento explica a arquitetura da primeira versão do Nexo em linguagem direta. Ele deve ser lido junto do código e da migration: nomes exatos de colunas, policies e scripts sempre têm o SQL e o `package.json` como fonte de verdade.
+Este documento explica a arquitetura da primeira versão do Nexo em linguagem direta. Ele deve ser lido junto do código e das migrations: nomes exatos de colunas, policies e scripts sempre têm o SQL e o `package.json` como fonte de verdade.
 
 ## Visão geral
 
@@ -18,7 +18,7 @@ Navegador
                          ├─ constraints e foreign keys
                          ├─ Row Level Security
                          ├─ Auth
-                         └─ bucket de avatars
+                         └─ buckets de avatars e covers
 ```
 
 Não existe um servidor próprio guardando uma chave privilegiada. Por isso, toda operação de dados ou Storage enviada pelo navegador é tratada como não confiável e precisa ser aceita pelas policies correspondentes.
@@ -106,7 +106,7 @@ Nesta versão, somente a curtida usa alteração otimista do cache. As demais mu
 auth.users 1 ─── 1 profiles
 ```
 
-O UUID do perfil corresponde ao UUID do usuário autenticado. `auth.users` cuida de login; `profiles` contém `username`, nome de exibição, bio, URL do avatar e timestamps. O username é normalizado para minúsculas, aceita de 3 a 30 letras minúsculas, números ou `_`, possui constraint de unicidade e não pode ser alterado pelo cliente. Validação prévia na interface serve apenas como feedback.
+O UUID do perfil corresponde ao UUID do usuário autenticado. `auth.users` cuida de login; `profiles` contém `username`, nome de exibição, bio, URLs do avatar e da capa e timestamps. O username é normalizado para minúsculas, aceita de 3 a 30 letras minúsculas, números ou `_`, possui constraint de unicidade e não pode ser alterado pelo cliente. As URLs de avatar e capa são opcionais e limitadas a 2.048 caracteres. Validação prévia na interface serve apenas como feedback.
 
 ### Publicações
 
@@ -180,12 +180,12 @@ Resumo das garantias esperadas no schema:
 
 | Entidade | Leitura | Escrita |
 | --- | --- | --- |
-| `profiles` | pública na API para perfil/busca | profile criado pelo trigger; update somente de `name`, `bio` e `avatar_url` do próprio UUID |
+| `profiles` | pública na API para perfil/busca | profile criado pelo trigger; update somente de `name`, `bio`, `avatar_url` e `cover_url` do próprio UUID |
 | `posts` | pública conforme o produto | insert/update/delete somente quando autor = `auth.uid()` |
 | `likes` | leitura necessária aos contadores | insert/delete somente quando usuário = `auth.uid()` |
 | `comments` | pública junto à publicação | insert/update/delete somente quando autor = `auth.uid()` |
 | `follows` | leitura necessária aos perfis | insert/delete somente quando seguidor = `auth.uid()` |
-| Storage de avatar | leitura pública do avatar | escrita limitada à pasta/objeto do próprio usuário |
+| Storage de avatar e capa | leitura pública da mídia | escrita limitada à pasta/objeto do próprio usuário em cada bucket |
 
 Exemplo conceitual para exclusão de post:
 
@@ -197,11 +197,39 @@ Esconder o botão não oferece essa garantia. RLS oferece.
 
 RLS e constraints têm responsabilidades diferentes. RLS responde “quem pode fazer?”, enquanto foreign keys, `unique`, `check` e `not null` respondem “este estado é válido?”. O projeto precisa das duas camadas.
 
-## Storage de avatar
+## Mídia do perfil
 
-O arquivo fica no bucket público `avatars` e o perfil guarda sua URL pública, não os bytes da imagem. O bucket limita cada objeto a 5 MB e aceita JPEG, PNG, WebP, GIF e AVIF. O upload usa `<auth.uid()>/<arquivo>`, permitindo que as policies de `storage.objects` comparem o primeiro segmento com o usuário da sessão. A leitura é pública; insert, update e delete ficam restritos à pasta do dono.
+O perfil guarda as URLs públicas em `avatar_url` e `cover_url`, não os bytes das imagens. O Storage separa a mídia em dois buckets:
 
-Ao escolher um novo avatar, a aplicação envia um objeto com nome baseado em timestamp e depois persiste a nova URL no perfil. Se uma dessas etapas falhar, a mutation apresenta erro; esta versão ainda não remove automaticamente arquivos antigos ou um upload órfão caso a atualização do perfil falhe.
+- `avatars`: objetos de até 5 MiB; novos uploads aceitam JPEG, PNG, WebP e AVIF;
+- `covers`: objetos de até 8 MiB; aceita JPEG, PNG, WebP, AVIF e GIF.
+
+Essas adições estão declaradas na migration cronológica `20260819000000_add_profile_cover.sql`, que acrescenta `cover_url`, seu grant de coluna, o bucket `covers` e suas policies sem modificar a migration inicial. A migration posterior `20260819010000_adjust_profile_media_mime_types.sql` ajusta somente os limites e MIME dos dois buckets: retira GIF de novos avatares e o habilita em capas. A presença dos arquivos no repositório não significa que tenham sido aplicados ou testados em um projeto remoto.
+
+Os dois buckets têm leitura pública. A escrita usa `<auth.uid()>/<arquivo>` e as policies de `storage.objects` restringem insert, update e delete à pasta cujo primeiro segmento coincide com o usuário autenticado. Na tabela, RLS exige que o perfil pertença à sessão, enquanto os grants limitam o cliente às colunas editáveis; `id`, `username` e timestamps continuam protegidos.
+
+### Seleção, crop e processamento no navegador
+
+A imagem pode vir do seletor de arquivos ou de botões específicos para avatar e capa que chamam a Clipboard API. A aplicação só consulta a área de transferência após essa ação explícita e diferencia falta de suporte do navegador, permissão negada e ausência de imagem copiada. O arquivo obtido segue as mesmas validações de MIME, tamanho e decodificação do seletor comum; usar o clipboard não contorna as regras do Storage.
+
+A seleção de uma imagem estática não inicia o upload. Um diálogo reutilizável baseado em `react-easy-crop` permite reposicionar e ampliar a imagem. Depois da confirmação, somente a região escolhida é desenhada em canvas e convertida para WebP:
+
+- avatar: crop quadrado, apresentado com máscara circular, saída de 512 × 512 pixels;
+- capa: proporção 3:1, saída de 1500 × 500 pixels.
+
+Esse processamento reduz dimensões e transferência sem exigir um servidor de imagens. A validação de MIME e tamanho no cliente melhora o feedback; os limites e tipos aceitos pelos buckets continuam sendo a barreira compartilhada. O navegador precisa conseguir decodificar a imagem estática e codificar WebP pelo canvas; caso contrário, o editor informa a limitação e não envia um arquivo com formato incorreto.
+
+GIF segue uma regra específica por contexto. Um GIF escolhido para capa recebe preview e confirmação, mas não passa por crop, canvas ou conversão: o arquivo original é enviado para preservar seus frames. Novos GIFs de avatar são rejeitados tanto pela interface quanto pela configuração final do bucket `avatars`. URLs de GIFs de avatar que já existiam continuam sendo exibidas normalmente; a mudança restringe novos uploads e não apaga objetos legados.
+
+`prefers-reduced-motion` reduz transições e animações controladas pela aplicação, mas não consegue pausar de forma nativa um GIF animado renderizado por `<img>`. Respeitar essa preferência para GIF exigiria processar os frames ou manter uma alternativa estática, algo que não faz parte desta versão.
+
+### Upload, troca e remoção
+
+Os arquivos recebem nomes gerados pela aplicação dentro da pasta do usuário, sem reutilizar o nome fornecido pelo arquivo local. Em uma troca, o fluxo é deliberadamente ordenado: faz upload da nova imagem, persiste sua URL em `profiles` e só então tenta excluir o objeto anterior. Se a atualização do perfil falhar depois do upload, o service tenta remover os objetos recém-enviados antes de propagar o erro. Se a limpeza de uma mídia antiga falhar, a nova mídia já aplicada não é descartada: a operação continua como sucesso com um aviso específico. Toda limpeza é best-effort e só tenta excluir uma URL que possa ser reconhecida como pertencente ao bucket, projeto Supabase e diretório do próprio usuário.
+
+A capa pode ser removida: `cover_url` volta a `null`, o perfil recupera o padrão visual da interface e a aplicação tenta limpar o objeto anterior com a mesma cautela. As mutations de mídia impedem confirmação duplicada e só exibem sucesso depois da atualização do perfil.
+
+O cache é revalidado de acordo com onde cada campo aparece. Toda atualização revalida `current-profile` e os perfis visitados. Quando avatar ou nome muda, também são revalidados feeds, post individual, comentários, posts do autor, busca e sugestões, pois esses resultados incorporam a identidade social. Alterar apenas a capa não invalida essas consultas, porque ela não aparece nos cards ou conteúdos sociais; assim a aplicação evita refetches sem efeito.
 
 ## Busca
 
@@ -249,7 +277,7 @@ As operações exibem feedback de sucesso ou erro, e confirmações precedem exc
 
 Para entender o sistema, siga esta ordem:
 
-1. migration em `supabase/migrations/`;
+1. migrations em `supabase/migrations/`;
 2. criação do cliente em `src/lib/`;
 3. provider/hook de autenticação;
 4. configuração de rotas e guard privado;

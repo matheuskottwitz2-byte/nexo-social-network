@@ -44,7 +44,13 @@ export function ProfilePage() {
     <main className="page-surface">
       <PageHeader title={profile.name} subtitle={`${profile.postsCount} ${profile.postsCount === 1 ? 'publicação' : 'publicações'}`} back />
       <section className="profile-hero">
-        <div className="profile-cover" aria-hidden="true"><span /><span /><span /></div>
+        <div className={`profile-cover ${profile.coverUrl ? 'has-image' : ''}`} aria-hidden="true">
+          {profile.coverUrl ? (
+            <img className="profile-cover-image" src={profile.coverUrl} alt="" />
+          ) : (
+            <><span /><span /><span /></>
+          )}
+        </div>
         <div className="profile-avatar-row">
           <Avatar name={profile.name} src={profile.avatarUrl} size="xl" />
           {isOwnProfile ? (

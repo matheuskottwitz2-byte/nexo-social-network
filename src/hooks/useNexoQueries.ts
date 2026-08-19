@@ -8,8 +8,8 @@ import {
   getSuggestedProfiles,
   searchProfiles,
   setFollowing,
-  updateProfile,
-  uploadAvatar,
+  updateProfileWithMedia,
+  type ProfileUpdateInput,
 } from '../services/profiles'
 import type { Post } from '../types/models'
 
@@ -212,19 +212,29 @@ export function useDashboard(userId: string) {
 export function useUpdateProfile(userId: string) {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: async (values: { name: string; bio: string; avatarFile?: File }) => {
-      const avatarUrl = values.avatarFile ? await uploadAvatar(userId, values.avatarFile) : undefined
-      await updateProfile(userId, { name: values.name, bio: values.bio, avatarUrl })
-    },
-    onSuccess: async () => {
-      await Promise.all([
+    mutationFn: (values: ProfileUpdateInput & { previousName: string }) =>
+      updateProfileWithMedia(userId, values),
+    onSuccess: async (_result, values) => {
+      const invalidations = [
         client.invalidateQueries({ queryKey: ['current-profile'] }),
         client.invalidateQueries({ queryKey: ['profile'] }),
-        client.invalidateQueries({ queryKey: ['feed'] }),
-        client.invalidateQueries({ queryKey: ['author-posts'] }),
-        client.invalidateQueries({ queryKey: ['search-profiles'] }),
-        client.invalidateQueries({ queryKey: ['suggested-profiles'] }),
-      ])
+      ]
+      const socialIdentityChanged = Boolean(
+        values.avatarFile ||
+        values.removeAvatar ||
+        values.name.trim() !== values.previousName.trim(),
+      )
+      if (socialIdentityChanged) {
+        invalidations.push(
+          client.invalidateQueries({ queryKey: ['feed'] }),
+          client.invalidateQueries({ queryKey: ['post'] }),
+          client.invalidateQueries({ queryKey: ['comments'] }),
+          client.invalidateQueries({ queryKey: ['author-posts'] }),
+          client.invalidateQueries({ queryKey: ['search-profiles'] }),
+          client.invalidateQueries({ queryKey: ['suggested-profiles'] }),
+        )
+      }
+      await Promise.all(invalidations)
     },
   })
 }
