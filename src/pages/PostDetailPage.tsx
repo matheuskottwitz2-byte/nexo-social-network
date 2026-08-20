@@ -43,7 +43,7 @@ export function PostDetailPage() {
       <PostCard post={postQuery.data} currentUserId={user!.id} detail />
       <form className="comment-form" onSubmit={submitComment}>
         <label htmlFor="comment">Entre na conversa</label>
-        <textarea id="comment" rows={3} value={content} onChange={(event) => setContent(event.target.value)} maxLength={COMMENT_MAX_LENGTH + 1} placeholder="Escreva uma resposta respeitosa…" />
+        <textarea id="comment" rows={3} value={content} onChange={(event) => setContent(event.target.value)} maxLength={COMMENT_MAX_LENGTH + 1} placeholder="Escreva uma resposta..." />
         <div className="composer-footer">
           <span className={`character-count ${remaining < 30 ? 'warning' : ''} ${remaining < 0 ? 'error' : ''}`}>{remaining}</span>
           <Button type="submit" loading={mutation.isPending} disabled={!content.trim() || remaining < 0}>Comentar <SendHorizontal className="size-4" /></Button>

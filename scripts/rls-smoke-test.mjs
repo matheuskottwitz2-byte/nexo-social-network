@@ -60,6 +60,10 @@ async function runSmokeTest() {
   let originalUserBCoverUrl
   let temporaryPostByBId
   let temporaryPostByAId
+  let requestedPostByAId
+  let temporaryMediaByBId
+  const cleanupMediaPathsForA = new Set()
+  const cleanupMediaPathsForB = new Set()
   let userACoverSnapshotCaptured = false
   let userBCoverSnapshotCaptured = false
   let ownCoverMutationAttempted = false
@@ -163,19 +167,34 @@ async function runSmokeTest() {
     userBCoverSnapshotCaptured = true
 
     // Um post temporário de B evita testar DELETE contra uma publicação preexistente.
-    const fixturePost = await clientB
-      .from('posts')
-      .insert({ author_id: userBId, content: temporaryPostByB })
-      .select('id, author_id, content')
-      .single()
+    const requestedPostByBId = randomUUID()
+    const fixturePostCreation = await clientB.rpc('create_post_with_media', {
+      p_post_id: requestedPostByBId,
+      p_content: temporaryPostByB,
+      p_media: [],
+    })
 
-    if (fixturePost.error || !fixturePost.data) {
+    if (fixturePostCreation.error || fixturePostCreation.data !== requestedPostByBId) {
       record(false, 'Não foi possível criar o post temporário de B', {
-        detail: errorDetail(fixturePost.error, 'A criação legítima do fixture falhou.'),
+        detail: errorDetail(fixturePostCreation.error, 'A criação atômica legítima do fixture falhou.'),
       })
       return
     }
-    temporaryPostByBId = fixturePost.data.id
+
+    const fixturePost = await clientB
+      .from('posts')
+      .select('id, author_id, content')
+      .eq('id', requestedPostByBId)
+      .maybeSingle()
+
+    if (fixturePost.error || fixturePost.data?.author_id !== userBId) {
+      record(false, 'Não foi possível confirmar o post temporário de B', {
+        detail: errorDetail(fixturePost.error, 'O post criado pela RPC não pertence a B.'),
+      })
+      return
+    }
+
+    temporaryPostByBId = requestedPostByBId
     setupComplete = true
     console.log('[INFO] Post temporário de B criado para os testes destrutivos controlados.')
 
@@ -219,6 +238,147 @@ async function runSmokeTest() {
       security: true,
       detail: errorDetail(postAfterDeleteAttempt.error, 'O post temporário de B desapareceu.'),
     })
+
+    const mediaByBPath = `${userBId}/${temporaryPostByBId}/${randomUUID()}.webp`
+    cleanupMediaPathsForB.add(mediaByBPath)
+
+    const mediaByBInsert = await clientB
+      .from('post_media')
+      .insert({
+        post_id: temporaryPostByBId,
+        owner_id: userBId,
+        media_type: 'image',
+        storage_path: mediaByBPath,
+        mime_type: 'image/webp',
+        width: 8,
+        height: 8,
+        position: 0,
+        alt_text: 'Fixture temporário do smoke test de RLS',
+      })
+      .select('id, post_id, owner_id, storage_path')
+      .single()
+
+    const mediaByBWasCreated =
+      !mediaByBInsert.error &&
+      mediaByBInsert.data?.post_id === temporaryPostByBId &&
+      mediaByBInsert.data?.owner_id === userBId
+
+    if (mediaByBInsert.data?.id) temporaryMediaByBId = mediaByBInsert.data.id
+
+    record(mediaByBWasCreated, 'B conseguiu preparar metadata temporária no próprio post', {
+      detail: errorDetail(mediaByBInsert.error, 'O fixture de post_media de B não foi criado.'),
+    })
+
+    const spoofedOwnerMediaPath = `${userBId}/${temporaryPostByBId}/${randomUUID()}.webp`
+    cleanupMediaPathsForB.add(spoofedOwnerMediaPath)
+
+    const spoofedOwnerInsert = await clientA
+      .from('post_media')
+      .insert({
+        post_id: temporaryPostByBId,
+        owner_id: userBId,
+        media_type: 'image',
+        storage_path: spoofedOwnerMediaPath,
+        mime_type: 'image/webp',
+        width: 8,
+        height: 8,
+        position: 1,
+        alt_text: null,
+      })
+      .select('id')
+
+    const spoofedOwnerInsertWasBlocked =
+      isExpectedAuthorizationError(spoofedOwnerInsert.error) &&
+      (!spoofedOwnerInsert.data || spoofedOwnerInsert.data.length === 0)
+
+    record(spoofedOwnerInsertWasBlocked, 'A NÃO conseguiu criar mídia para post de B usando owner_id de B', {
+      security: true,
+      detail: spoofedOwnerInsertWasBlocked
+        ? undefined
+        : errorDetail(spoofedOwnerInsert.error, 'O INSERT adulterado não foi bloqueado pela RLS.'),
+    })
+
+    const mismatchedOwnerMediaPath = `${userAId}/${temporaryPostByBId}/${randomUUID()}.webp`
+    cleanupMediaPathsForA.add(mismatchedOwnerMediaPath)
+
+    const mismatchedOwnerInsert = await clientA
+      .from('post_media')
+      .insert({
+        post_id: temporaryPostByBId,
+        owner_id: userAId,
+        media_type: 'image',
+        storage_path: mismatchedOwnerMediaPath,
+        mime_type: 'image/webp',
+        width: 8,
+        height: 8,
+        position: 2,
+        alt_text: null,
+      })
+      .select('id')
+
+    const mismatchedOwnerInsertWasRejected =
+      Boolean(mismatchedOwnerInsert.error) &&
+      (!mismatchedOwnerInsert.data || mismatchedOwnerInsert.data.length === 0)
+
+    record(mismatchedOwnerInsertWasRejected, 'A NÃO conseguiu vincular sua mídia ao post de B', {
+      security: true,
+      detail: mismatchedOwnerInsertWasRejected
+        ? undefined
+        : errorDetail(
+            mismatchedOwnerInsert.error,
+            'O vínculo incompatível entre owner_id e autor do post foi aceito.',
+          ),
+    })
+
+    if (temporaryMediaByBId) {
+      const unauthorizedMediaDelete = await clientA
+        .from('post_media')
+        .delete()
+        .eq('id', temporaryMediaByBId)
+        .select('id')
+
+      const mediaAfterDeleteAttempt = await clientB
+        .from('post_media')
+        .select('id, post_id, owner_id, storage_path')
+        .eq('id', temporaryMediaByBId)
+        .maybeSingle()
+
+      const mediaDeleteReturnedNoRows =
+        Array.isArray(unauthorizedMediaDelete.data) && unauthorizedMediaDelete.data.length === 0
+      const mediaByBStillExists =
+        !mediaAfterDeleteAttempt.error &&
+        mediaAfterDeleteAttempt.data?.id === temporaryMediaByBId &&
+        mediaAfterDeleteAttempt.data?.owner_id === userBId
+      const mediaDeleteWasBlocked =
+        mediaByBStillExists &&
+        (mediaDeleteReturnedNoRows || isExpectedAuthorizationError(unauthorizedMediaDelete.error))
+
+      record(mediaDeleteWasBlocked, 'A NÃO conseguiu excluir metadata de mídia de B', {
+        security: true,
+        detail: mediaDeleteWasBlocked
+          ? undefined
+          : errorDetail(
+              unauthorizedMediaDelete.error,
+              'DELETE de post_media afetou uma linha ou produziu um resultado inesperado.',
+            ),
+      })
+      record(mediaByBStillExists, 'Metadata de mídia de B continua existente', {
+        security: true,
+        detail: errorDetail(
+          mediaAfterDeleteAttempt.error,
+          'A metadata temporária de B desapareceu após a tentativa de A.',
+        ),
+      })
+    } else {
+      record(false, 'A NÃO conseguiu excluir metadata de mídia de B', {
+        security: true,
+        detail: 'O fixture de post_media de B não pôde ser criado.',
+      })
+      record(false, 'Metadata de mídia de B continua existente', {
+        security: true,
+        detail: 'Não havia metadata de B para confirmar.',
+      })
+    }
 
     const unauthorizedProfileUpdate = await clientA
       .from('profiles')
@@ -353,21 +513,65 @@ async function runSmokeTest() {
         : errorDetail(unauthorizedInsert.error, 'O INSERT não foi rejeitado explicitamente pela RLS.'),
     })
 
-    const legitimateInsert = await clientA
-      .from('posts')
-      .insert({ author_id: userAId, content: temporaryPostByA })
-      .select('id, author_id')
-      .single()
+    requestedPostByAId = randomUUID()
+    const legitimateInsert = await clientA.rpc('create_post_with_media', {
+      p_post_id: requestedPostByAId,
+      p_content: temporaryPostByA,
+      p_media: [],
+    })
+
+    const ownPostAfterInsert = legitimateInsert.error
+      ? { data: null, error: legitimateInsert.error }
+      : await clientA
+          .from('posts')
+          .select('id, author_id')
+          .eq('id', requestedPostByAId)
+          .maybeSingle()
 
     const ownPostWasCreated =
-      !legitimateInsert.error && legitimateInsert.data?.author_id === userAId
-    if (legitimateInsert.data?.id) temporaryPostByAId = legitimateInsert.data.id
+      !legitimateInsert.error &&
+      legitimateInsert.data === requestedPostByAId &&
+      !ownPostAfterInsert.error &&
+      ownPostAfterInsert.data?.author_id === userAId
+    if (ownPostAfterInsert.data?.id) temporaryPostByAId = ownPostAfterInsert.data.id
 
     record(ownPostWasCreated, 'A conseguiu criar conteúdo em seu próprio nome', {
-      detail: errorDetail(legitimateInsert.error, 'O INSERT legítimo de A falhou.'),
+      detail: errorDetail(
+        legitimateInsert.error ?? ownPostAfterInsert.error,
+        'A criação atômica legítima de A falhou.',
+      ),
     })
 
     if (temporaryPostByAId) {
+      const mediaByAPath = `${userAId}/${temporaryPostByAId}/${randomUUID()}.webp`
+      cleanupMediaPathsForA.add(mediaByAPath)
+
+      const mediaByAInsert = await clientA
+        .from('post_media')
+        .insert({
+          post_id: temporaryPostByAId,
+          owner_id: userAId,
+          media_type: 'image',
+          storage_path: mediaByAPath,
+          mime_type: 'image/webp',
+          width: 8,
+          height: 8,
+          position: 0,
+          alt_text: 'Fixture temporário próprio do smoke test de RLS',
+        })
+        .select('id, post_id, owner_id, storage_path')
+        .single()
+
+      const ownMediaWasCreated =
+        !mediaByAInsert.error &&
+        mediaByAInsert.data?.post_id === temporaryPostByAId &&
+        mediaByAInsert.data?.owner_id === userAId &&
+        mediaByAInsert.data?.storage_path === mediaByAPath
+
+      record(ownMediaWasCreated, 'A conseguiu criar metadata de mídia no próprio post', {
+        detail: errorDetail(mediaByAInsert.error, 'O INSERT legítimo de post_media de A falhou.'),
+      })
+
       const legitimateDelete = await clientA
         .from('posts')
         .delete()
@@ -383,8 +587,14 @@ async function runSmokeTest() {
         detail: errorDetail(legitimateDelete.error, 'O DELETE legítimo de A não removeu exatamente uma linha.'),
       })
 
-      if (ownPostWasDeleted) temporaryPostByAId = undefined
+      if (ownPostWasDeleted) {
+        temporaryPostByAId = undefined
+        requestedPostByAId = undefined
+      }
     } else {
+      record(false, 'A conseguiu criar metadata de mídia no próprio post', {
+        detail: 'O post temporário de A não chegou a ser criado.',
+      })
       record(false, 'A conseguiu remover seu próprio conteúdo', {
         detail: 'O post temporário de A não chegou a ser criado.',
       })
@@ -429,6 +639,39 @@ async function runSmokeTest() {
       }
     }
 
+    if (userAId && cleanupMediaPathsForA.size > 0) {
+      const cleanupMediaA = await clientA
+        .from('post_media')
+        .delete()
+        .in('storage_path', [...cleanupMediaPathsForA])
+        .select('id')
+
+      if (cleanupMediaA.error) {
+        record(false, 'Falha ao limpar metadata temporária de mídia associada a A', {
+          detail: errorDetail(cleanupMediaA.error, 'Limpeza de post_media de A falhou.'),
+        })
+      } else {
+        console.log('[INFO] Metadata temporária de mídia associada a A foi removida ou já havia sido eliminada por cascade.')
+      }
+    }
+
+    if (userBId && cleanupMediaPathsForB.size > 0) {
+      const cleanupMediaB = await clientB
+        .from('post_media')
+        .delete()
+        .in('storage_path', [...cleanupMediaPathsForB])
+        .select('id')
+
+      if (cleanupMediaB.error) {
+        record(false, 'Falha ao limpar metadata temporária de mídia associada a B', {
+          detail: errorDetail(cleanupMediaB.error, 'Limpeza de post_media de B falhou.'),
+        })
+      } else {
+        temporaryMediaByBId = undefined
+        console.log('[INFO] Metadata temporária de mídia associada a B foi removida ou já havia sido eliminada por cascade.')
+      }
+    }
+
     if (userBId) {
       // Remove tanto o fixture legítimo quanto um eventual INSERT indevido caso a RLS esteja quebrada.
       const cleanupB = await clientB
@@ -447,20 +690,29 @@ async function runSmokeTest() {
       }
     }
 
-    if (userAId && temporaryPostByAId) {
+    if (userAId && requestedPostByAId) {
       const cleanupA = await clientA
         .from('posts')
         .delete()
-        .eq('id', temporaryPostByAId)
+        .eq('id', requestedPostByAId)
         .eq('author_id', userAId)
         .select('id')
 
-      if (cleanupA.error || cleanupA.data?.length !== 1) {
-        record(false, 'Falha ao limpar o post temporário de A', {
-          detail: errorDetail(cleanupA.error, 'Limpeza de A não removeu exatamente uma linha.'),
+      const cleanupAVerification = await clientA
+        .from('posts')
+        .select('id')
+        .eq('id', requestedPostByAId)
+        .maybeSingle()
+
+      if (cleanupAVerification.error || cleanupAVerification.data) {
+        record(false, 'CRÍTICO: falha ao limpar o post temporário de A', {
+          detail: errorDetail(
+            cleanupAVerification.error ?? cleanupA.error,
+            'O post solicitado por A ainda existe após a limpeza.',
+          ),
         })
       } else {
-        console.log('[INFO] Post temporário de A foi removido durante a limpeza final.')
+        console.log('[INFO] Post temporário solicitado por A foi removido ou já estava ausente.')
       }
     }
 

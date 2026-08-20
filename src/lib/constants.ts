@@ -1,4 +1,8 @@
 export const POST_MAX_LENGTH = 500
+export const POST_MEDIA_MAX_ITEMS = 4
+export const POST_MEDIA_MAX_SOURCE_BYTES = 8 * 1024 * 1024
+export const POST_MEDIA_MAX_DIMENSION = 1920
+export const POST_MEDIA_ALT_MAX_LENGTH = 1000
 export const COMMENT_MAX_LENGTH = 500
 export const PROFILE_NAME_MAX_LENGTH = 80
 export const PROFILE_BIO_MAX_LENGTH = 280

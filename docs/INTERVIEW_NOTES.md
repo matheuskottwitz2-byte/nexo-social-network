@@ -81,7 +81,19 @@ Crie pelo menos dois usuários e teste leitura e escrita com cada sessão: A nã
 
 ### Como funciona a relação entre usuários e posts?
 
-Um perfil pode ter muitos posts; cada post referencia um autor por foreign key. Ao consultar o feed, a query combina os dados do post com os campos públicos do perfil. A policy de escrita exige que o autor enviado seja o UUID autenticado.
+Um perfil pode ter muitos posts; cada post referencia um autor por foreign key e pode ter até quatro linhas ordenadas em `post_media`. Ao consultar o feed, a query combina post, campos públicos do perfil e mídia. Na criação, a RPC deriva o autor de `auth.uid()` em vez de confiar em um UUID enviado como autoria pelo cliente.
+
+### Por que não guardar quatro URLs diretamente em `posts`?
+
+Quatro colunas fixas misturariam conteúdo e anexos, repetiriam campos e dificultariam representar ordem, dimensões, MIME e texto alternativo. Uma linha por item em `post_media` permite constraints próprias, mantém a relação 1:N explícita e deixa `storage_path` como referência estável; a URL pública é derivada do bucket. A posição limitada de 0 a 3 preserva o máximo atual de quatro imagens.
+
+### Como impedir mídia em nome de outro usuário?
+
+O navegador envia conteúdo e metadados, mas a RPC usa `auth.uid()` para preencher `posts.author_id` e `post_media.owner_id`. A foreign key composta exige que dono e autor coincidam, RLS restringe insert/delete de mídia ao proprietário e a policy do Storage exige o primeiro diretório igual ao UUID autenticado; a leitura acompanha a visibilidade pública do post. O path também incorpora o UUID do post, e o browser não pode contornar o fluxo inserindo diretamente em `posts` ou escrevendo na coluna legada `image_url`.
+
+### O que acontece em uma falha parcial?
+
+Storage e PostgreSQL não compartilham uma transação. Na criação, os uploads acontecem antes da RPC; se um upload falhar, os anteriores são removidos, e se a RPC falhar após os uploads, o cliente confirma se o post existe antes de limpar. A RPC torna atômica apenas a parte de banco: `posts` e `post_media` entram juntos ou não entram. Se nem a verificação for conclusiva, a aplicação pede para recarregar em vez de arriscar excluir mídia válida. Na exclusão, o banco é removido primeiro e faz cascade dos metadados; a limpeza posterior do Storage é best-effort e uma falha gera aviso sem fingir que o post ainda existe.
 
 ### Como implementou curtidas sem duplicação?
 
@@ -177,7 +189,7 @@ Não apenas reduzindo o desktop. O layout troca sidebar por navegação mobile, 
 
 ### Que cuidados de acessibilidade foram tomados?
 
-Inputs têm labels, ações usam elementos nativos, imagens têm texto alternativo e o CSS define foco visível. O diálogo de confirmação usa `alertdialog`, recebe foco inicial e fecha com Escape. O editor de imagem também possui título e descrição, contém o foco, devolve-o ao gatilho, fecha com Escape e permite reposicionar o crop com teclado depois de aplicar zoom. O diálogo de confirmação genérico ainda não possui focus trap/retorno de foco, e não há auditoria formal de contraste; esses pontos devem ser validados antes de produção.
+Inputs têm labels, ações usam elementos nativos e o CSS define foco visível. Imagens usam o texto alternativo persistido quando disponível; sem ele, não é inventada uma descrição, e o controle que abre a mídia mantém um nome acessível. O diálogo de confirmação usa `alertdialog`, recebe foco inicial e fecha com Escape. O editor de imagem também possui título e descrição, contém o foco, devolve-o ao gatilho, fecha com Escape e permite reposicionar o crop com teclado depois de aplicar zoom. O diálogo de confirmação genérico ainda não possui focus trap/retorno de foco, e não há auditoria formal de contraste; esses pontos devem ser validados antes de produção.
 
 ### Qual foi o maior trade-off da primeira versão?
 
@@ -185,7 +197,7 @@ Uma resposta consistente é a escolha por acesso direto ao Supabase com RLS: red
 
 ### O que você melhoraria com mais tempo?
 
-Escolha prioridades justificáveis, como testes automatizados de RLS, paginação, realtime, observabilidade, moderação, acessibilidade auditada ou imagens em posts. Relacione cada melhoria a um risco ou necessidade; não liste tecnologia apenas para parecer mais complexo.
+Escolha prioridades justificáveis, como testes automatizados de RLS, paginação, realtime, observabilidade, moderação ou acessibilidade auditada. Relacione cada melhoria a um risco ou necessidade; não liste tecnologia apenas para parecer mais complexo.
 
 ### Como você levaria o projeto a uma escala maior?
 
@@ -196,7 +208,7 @@ Meça antes de redesenhar. Possíveis passos incluem paginação por cursor, ín
 - Execute o projeto e refaça cadastro, login e logout.
 - Crie dois usuários e teste as fronteiras de RLS.
 - Leia as migrations completas e explique cada constraint importante.
-- Trace no código um post do formulário até a tabela.
+- Trace no código um post com imagem do composer ao Storage, à RPC e às tabelas `posts`/`post_media`.
 - Trace uma curtida da mutation, passando pelo cache, até a constraint única.
 - Trace uma troca de avatar do crop client-side até o Storage, a atualização de `profiles` e a limpeza posterior.
 - Explique por que GIF é recusado em novos avatares, preservado em capas e como o path pelo UUID participa da autorização.

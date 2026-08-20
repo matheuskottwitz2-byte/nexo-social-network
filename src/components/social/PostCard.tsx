@@ -8,6 +8,7 @@ import { getErrorMessage } from '../../utils/errors'
 import { compactNumber, formatFullDate, formatRelativeDate } from '../../utils/format'
 import { Avatar } from '../ui/Avatar'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { PostMediaGrid } from './PostMediaGrid'
 
 interface PostCardProps {
   post: Post
@@ -32,9 +33,17 @@ export function PostCard({ post, currentUserId, detail = false }: PostCardProps)
 
   async function handleDelete() {
     try {
-      await deleteMutation.mutateAsync(post.id)
+      const result = await deleteMutation.mutateAsync({
+        postId: post.id,
+        userId: currentUserId,
+        authorId: post.authorId,
+      })
       setConfirmOpen(false)
-      toast.success('Publicação excluída.')
+      if (result.cleanupFailed) {
+        toast.warning('Publicação excluída. Alguns arquivos de mídia podem precisar de limpeza no Storage.')
+      } else {
+        toast.success('Publicação excluída.')
+      }
       if (detail) navigate('/')
     } catch (error) {
       toast.error(getErrorMessage(error, 'Não foi possível excluir a publicação.'))
@@ -62,14 +71,14 @@ export function PostCard({ post, currentUserId, detail = false }: PostCardProps)
             </button>
           )}
         </header>
-        {detail ? (
+        {post.content && (detail ? (
           <p className="post-text detail-text">{post.content}</p>
         ) : (
           <Link to={`/post/${post.id}`} className="post-body-link">
             <p className="post-text">{post.content}</p>
           </Link>
-        )}
-        {post.imageUrl && <img className="post-image" src={post.imageUrl} alt="Imagem anexada à publicação" />}
+        ))}
+        <PostMediaGrid media={post.media} eager={detail} />
         <footer className="post-actions">
           <button className={`post-action ${post.likedByMe ? 'liked' : ''}`} onClick={handleLike} disabled={likeMutation.isPending} aria-label={post.likedByMe ? 'Remover curtida' : 'Curtir'} aria-pressed={post.likedByMe}>
             <Heart className="size-5" fill={post.likedByMe ? 'currentColor' : 'none'} />
@@ -84,7 +93,7 @@ export function PostCard({ post, currentUserId, detail = false }: PostCardProps)
       <ConfirmDialog
         open={confirmOpen}
         title="Excluir publicação?"
-        description="Essa ação é permanente e a publicação, suas curtidas e comentários serão removidos."
+        description="Essa ação é permanente e a publicação, suas imagens, curtidas e comentários serão removidos."
         loading={deleteMutation.isPending}
         onCancel={() => setConfirmOpen(false)}
         onConfirm={handleDelete}

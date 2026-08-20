@@ -1,7 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createComment, deleteComment, getComments } from '../services/comments'
 import { getDashboardStats, getPostsOverTime } from '../services/dashboard'
-import { createPost, deletePost, getFeed, getPost, getPostsByAuthor, setPostLiked } from '../services/posts'
+import {
+  createPost,
+  deletePost,
+  getFeed,
+  getPost,
+  getPostsByAuthor,
+  setPostLiked,
+  type CreatePostInput,
+  type DeletePostInput,
+} from '../services/posts'
 import {
   getProfile,
   getProfileById,
@@ -14,6 +23,7 @@ import {
 import type { Post } from '../types/models'
 
 type LikeVariables = { userId: string; postId: string; authorId: string; shouldLike: boolean }
+type DeletePostVariables = DeletePostInput & { authorId: string }
 
 function updatePostLike(post: Post, variables: LikeVariables): Post {
   if (post.id !== variables.postId || post.likedByMe === variables.shouldLike) return post
@@ -39,14 +49,13 @@ export function useFeed(userId: string, mode: 'all' | 'following') {
 export function useCreatePost(userId: string) {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (content: string) => createPost(userId, content),
+    mutationFn: (input: CreatePostInput) => createPost(userId, input),
     onSuccess: async () => {
       await Promise.all([
-        client.invalidateQueries({ queryKey: ['feed'] }),
-        client.invalidateQueries({ queryKey: ['post'] }),
+        client.invalidateQueries({ queryKey: ['feed', userId] }),
         client.invalidateQueries({ queryKey: ['profile'] }),
-        client.invalidateQueries({ queryKey: ['author-posts'] }),
-        client.invalidateQueries({ queryKey: ['dashboard'] }),
+        client.invalidateQueries({ queryKey: ['author-posts', userId, userId], exact: true }),
+        client.invalidateQueries({ queryKey: ['dashboard', userId], exact: true }),
       ])
     },
   })
@@ -55,14 +64,17 @@ export function useCreatePost(userId: string) {
 export function useDeletePost() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: deletePost,
-    onSuccess: async () => {
+    mutationFn: ({ postId, userId }: DeletePostVariables) => deletePost({ postId, userId }),
+    onSuccess: async (_result, variables) => {
+      client.removeQueries({ queryKey: ['post', variables.postId, variables.userId], exact: true })
       await Promise.all([
-        client.invalidateQueries({ queryKey: ['feed'] }),
-        client.invalidateQueries({ queryKey: ['post'] }),
+        client.invalidateQueries({ queryKey: ['feed', variables.userId] }),
         client.invalidateQueries({ queryKey: ['profile'] }),
-        client.invalidateQueries({ queryKey: ['author-posts'] }),
-        client.invalidateQueries({ queryKey: ['dashboard'] }),
+        client.invalidateQueries({
+          queryKey: ['author-posts', variables.authorId, variables.userId],
+          exact: true,
+        }),
+        client.invalidateQueries({ queryKey: ['dashboard', variables.userId], exact: true }),
       ])
     },
   })

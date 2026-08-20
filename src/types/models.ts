@@ -15,11 +15,23 @@ export interface Profile extends ProfileSummary {
   followedByMe: boolean
 }
 
+export interface PostMedia {
+  id: string
+  mediaType: 'image'
+  storagePath: string | null
+  url: string
+  mimeType: string | null
+  width: number | null
+  height: number | null
+  position: number
+  altText: string | null
+}
+
 export interface Post {
   id: string
   authorId: string
   content: string
-  imageUrl: string | null
+  media: PostMedia[]
   createdAt: string
   author: ProfileSummary
   likeCount: number

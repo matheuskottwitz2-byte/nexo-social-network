@@ -13,7 +13,8 @@ A aplicação é uma SPA instalável e oferece temas claro e escuro. O acesso ao
 ### Social
 
 - Feed geral e feed de pessoas seguidas.
-- Criação e exclusão das próprias publicações.
+- Criação e exclusão das próprias publicações, com texto, até quatro imagens ou ambos.
+- Otimização das imagens no navegador, preferindo WebP e limitando o maior lado a 1.920 px, com grid responsivo e visualizador ampliado.
 - Curtidas com atualização otimista e rollback em caso de erro.
 - Comentários em publicações.
 - Seguir e deixar de seguir pessoas.
@@ -123,7 +124,6 @@ Esses comandos verificam estática, tipos e bundle local. Eles não substituem t
 
 ## Roadmap
 
-- Imagens em publicações.
 - Notificações, realtime e moderação.
 - Cobertura automatizada de unidade, integração e ponta a ponta.
 

@@ -1,3 +1,8 @@
+import {
+  POST_MEDIA_MAX_DIMENSION,
+  POST_MEDIA_MAX_SOURCE_BYTES,
+} from '../lib/constants'
+
 export type ImageCropMode = 'avatar' | 'cover'
 
 export interface CroppedAreaPixels {
@@ -22,6 +27,24 @@ const OUTPUT_CONFIG: Record<
   cover: { width: 1500, height: 500, quality: 0.86 },
 }
 
+export const POST_IMAGE_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/avif',
+] as const
+
+export type PostImageMimeType = (typeof POST_IMAGE_MIME_TYPES)[number]
+
+export interface ProcessedPostImage {
+  file: File
+  width: number
+  height: number
+}
+
+const POST_IMAGE_QUALITY = 0.88
+const POST_IMAGE_MAX_DATABASE_DIMENSION = 32768
+
 function isFinitePositive(value: number) {
   return Number.isFinite(value) && value > 0
 }
@@ -39,6 +62,17 @@ function fileNameFor(originalName: string, mode: ImageCropMode) {
     .replace(/^-+|-+$/g, '')
 
   return `${stem || mode}.webp`
+}
+
+function postImageFileName(originalName: string, extension: string) {
+  const stem = originalName
+    .replace(/\.[^.]+$/, '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+
+  return `${stem || 'imagem'}.${extension}`
 }
 
 async function decodeWithImageElement(file: File): Promise<DecodedImage> {
@@ -107,6 +141,118 @@ function canvasToWebP(canvas: HTMLCanvasElement, quality: number) {
       quality,
     )
   })
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: 'image/jpeg' | 'image/png', quality?: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob?.type === type) {
+          resolve(blob)
+          return
+        }
+        reject(new Error('Não foi possível otimizar esta imagem neste navegador.'))
+      },
+      type,
+      quality,
+    )
+  })
+}
+
+function isPostImageMimeType(value: string): value is PostImageMimeType {
+  return (POST_IMAGE_MIME_TYPES as readonly string[]).includes(value)
+}
+
+export function validatePostImageFile(file: File): string | null {
+  const mimeType = file.type.toLowerCase()
+  if (!isPostImageMimeType(mimeType)) {
+    if (mimeType === 'image/gif') {
+      return 'GIF ainda não é aceito em publicações. Use JPEG, PNG, WebP ou AVIF.'
+    }
+    return 'Use uma imagem JPEG, PNG, WebP ou AVIF.'
+  }
+  if (file.size <= 0) return 'A imagem selecionada está vazia.'
+  if (file.size > POST_MEDIA_MAX_SOURCE_BYTES) {
+    return 'Cada imagem pode ter no máximo 8 MiB antes da otimização.'
+  }
+  return null
+}
+
+/**
+ * Decodes the source with its embedded orientation, keeps the original aspect
+ * ratio and reduces only images whose largest side is above the post limit.
+ * WebP is preferred; browsers without a WebP encoder retain a small original
+ * or receive a resized JPEG/PNG fallback without mislabelling the bytes.
+ */
+export async function processPostImage(file: File): Promise<ProcessedPostImage> {
+  const validationError = validatePostImageFile(file)
+  if (validationError) throw new Error(validationError)
+
+  const decoded = await decodeImage(file)
+  try {
+    if (!isFinitePositive(decoded.width) || !isFinitePositive(decoded.height)) {
+      throw new Error('A imagem selecionada não possui dimensões válidas.')
+    }
+    if (
+      decoded.width > POST_IMAGE_MAX_DATABASE_DIMENSION ||
+      decoded.height > POST_IMAGE_MAX_DATABASE_DIMENSION
+    ) {
+      throw new Error('As dimensões desta imagem são grandes demais para uma publicação.')
+    }
+
+    const scale = Math.min(1, POST_MEDIA_MAX_DIMENSION / Math.max(decoded.width, decoded.height))
+    const width = Math.max(1, Math.round(decoded.width * scale))
+    const height = Math.max(1, Math.round(decoded.height * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+
+    try {
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('Seu navegador não conseguiu preparar esta imagem.')
+      context.imageSmoothingEnabled = true
+      context.imageSmoothingQuality = 'high'
+      context.drawImage(decoded.source, 0, 0, decoded.width, decoded.height, 0, 0, width, height)
+
+      let outputBlob: Blob
+      let outputName: string
+
+      try {
+        outputBlob = await canvasToWebP(canvas, POST_IMAGE_QUALITY)
+        outputName = postImageFileName(file.name, 'webp')
+      } catch {
+        if (scale === 1) {
+          return { file, width, height }
+        }
+
+        const fallbackType = file.type.toLowerCase() === 'image/jpeg' ? 'image/jpeg' : 'image/png'
+        outputBlob = await canvasToBlob(
+          canvas,
+          fallbackType,
+          fallbackType === 'image/jpeg' ? POST_IMAGE_QUALITY : undefined,
+        )
+        outputName = postImageFileName(file.name, fallbackType === 'image/jpeg' ? 'jpg' : 'png')
+      }
+
+      if (outputBlob.size > POST_MEDIA_MAX_SOURCE_BYTES) {
+        throw new Error('A imagem otimizada ainda excede o limite de 8 MiB.')
+      }
+
+      return {
+        file: new File([outputBlob], outputName, {
+          type: outputBlob.type,
+          lastModified: Date.now(),
+        }),
+        width,
+        height,
+      }
+    } finally {
+      canvas.width = 0
+      canvas.height = 0
+    }
+  } finally {
+    decoded.dispose()
+  }
 }
 
 /**

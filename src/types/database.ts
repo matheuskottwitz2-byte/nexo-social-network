@@ -23,6 +23,12 @@ export interface Database {
         Update: { content?: string; image_url?: string | null; updated_at?: string }
         Relationships: [Relationship]
       }
+      post_media: {
+        Row: { id: string; post_id: string; owner_id: string; media_type: 'image'; storage_path: string; mime_type: string; width: number; height: number; position: number; alt_text: string | null; created_at: string }
+        Insert: { id?: string; post_id: string; owner_id: string; media_type?: 'image'; storage_path: string; mime_type: string; width: number; height: number; position: number; alt_text?: string | null; created_at?: string }
+        Update: never
+        Relationships: [Relationship]
+      }
       likes: {
         Row: { user_id: string; post_id: string; created_at: string }
         Insert: { user_id: string; post_id: string; created_at?: string }
@@ -44,6 +50,10 @@ export interface Database {
     }
     Views: Record<string, never>
     Functions: {
+      create_post_with_media: {
+        Args: { p_post_id: string; p_content: string; p_media?: Json }
+        Returns: string
+      }
       get_dashboard_stats: {
         Args: Record<PropertyKey, never>
         Returns: { posts_count: number; likes_received: number; comments_received: number; followers_count: number; following_count: number; engagement_last_30_days: number }[]

@@ -18,7 +18,7 @@ Navegador
                          ├─ constraints e foreign keys
                          ├─ Row Level Security
                          ├─ Auth
-                         └─ buckets de avatars e covers
+                         └─ buckets de avatars, covers e post-media
 ```
 
 Não existe um servidor próprio guardando uma chave privilegiada. Por isso, toda operação de dados ou Storage enviada pelo navegador é tratada como não confiável e precisa ser aceita pelas policies correspondentes.
@@ -111,10 +111,20 @@ O UUID do perfil corresponde ao UUID do usuário autenticado. `auth.users` cuida
 ### Publicações
 
 ```text
-profiles 1 ─── N posts
+profiles 1 ─── N posts 1 ─── N post_media
 ```
 
-Cada post guarda a chave do autor, texto e timestamps. O feed consulta posts com os campos públicos do perfil e ordena por criação decrescente. A interface pode ocultar a ação de exclusão para terceiros, enquanto a policy garante que apenas o autor efetivamente a execute.
+Cada post guarda a chave do autor, texto e timestamps; pode conter texto, mídia ou ambos. `post_media` mantém uma linha por imagem, com ordem entre 0 e 3, path no Storage, MIME, dimensões e texto alternativo opcional. A chave estrangeira composta (`post_id`, `owner_id`) exige que o dono da mídia também seja o autor do post, enquanto constraints de posição limitam cada publicação a quatro anexos sem criar quatro colunas de URL. Constraint triggers `deferrable initially deferred` verificam o estado final da transação: a RPC pode inserir o post antes das mídias, mas excluir diretamente o último anexo de um post sem texto é rejeitado para que ele nunca fique vazio. Um trigger anterior à exclusão bloqueia a linha do post durante a transação e serializa tentativas concorrentes de remover anexos.
+
+O bucket público `post-media` aceita JPEG, PNG, WebP e AVIF de até 8 MiB. `storage_path` é a referência persistida e o frontend deriva a URL pública a partir do bucket; assim, o banco não duplica a configuração da origem pública. A coluna antiga `posts.image_url` permanece apenas para leitura de posts legados quando não há linhas em `post_media`. Novas criações gravam `image_url` como `null`, e o navegador não conserva grant de insert/update para essa coluna.
+
+Antes do upload, o navegador respeita a orientação e a proporção da imagem, sem crop, reduz o maior lado para no máximo 1.920 pixels e tenta gerar WebP. Se o navegador não codificar WebP, uma imagem que não precisava ser reduzida pode manter o arquivo original; uma imagem redimensionada usa fallback JPEG ou PNG com MIME e extensão coerentes. O composer permite substituir e remover imagens antes de publicar; novas mídias não expõem edição de texto alternativo nesta versão, mas valores já armazenados continuam sendo renderizados. Feed, perfil e detalhe compartilham a mesma apresentação: uma imagem preserva sua proporção, enquanto duas a quatro usam um grid editorial; o visualizador ampliado sempre contém a imagem completa e oferece fechamento, navegação por botões e teclado e gerenciamento de foco.
+
+Os objetos precisam existir antes da escrita no banco. O cliente gera o UUID do post, faz upload em `<auth.uid()>/<post-id>/<arquivo>` e chama `create_post_with_media()`. Essa RPC `security definer` só pode ser executada pelo papel `authenticated`, fixa um `search_path` vazio e deriva autor e proprietário de `auth.uid()`; ela cria `posts` e `post_media` na mesma transação, portanto uma falha no banco não deixa apenas metade desses registros. Se upload ou criação falhar e o banco confirmar que o post não existe, o cliente tenta remover os objetos já enviados. Quando a resposta da RPC é ambígua, ele consulta o post antes de decidir, evitando apagar mídia de uma publicação que possa ter sido criada.
+
+Na exclusão, a ordem é inversa: o post do próprio autor é removido primeiro; foreign keys com cascade eliminam `post_media` e as relações dependentes no banco. Só depois o cliente tenta apagar os paths previamente lidos do Storage. Essa limpeza é best-effort: uma falha gera aviso, mas não apresenta como fracassada uma exclusão de banco que já ocorreu.
+
+A migration `20260819020000_add_post_media.sql` declara tabela, constraints, bucket, policies, grants e RPC. Sua presença no repositório não significa que ela tenha sido aplicada ou validada contra um projeto Supabase remoto.
 
 ### Curtidas
 
@@ -181,11 +191,13 @@ Resumo das garantias esperadas no schema:
 | Entidade | Leitura | Escrita |
 | --- | --- | --- |
 | `profiles` | pública na API para perfil/busca | profile criado pelo trigger; update somente de `name`, `bio`, `avatar_url` e `cover_url` do próprio UUID |
-| `posts` | pública conforme o produto | insert/update/delete somente quando autor = `auth.uid()` |
+| `posts` | pública conforme o produto | criação pela RPC com autor derivado de `auth.uid()`; delete somente do autor; update direto indisponível ao navegador |
+| `post_media` | pública quando o post existe | insert/delete somente do dono e vinculado a post do mesmo autor; sem update pelo navegador |
 | `likes` | leitura necessária aos contadores | insert/delete somente quando usuário = `auth.uid()` |
 | `comments` | pública junto à publicação | insert/update/delete somente quando autor = `auth.uid()` |
 | `follows` | leitura necessária aos perfis | insert/delete somente quando seguidor = `auth.uid()` |
 | Storage de avatar e capa | leitura pública da mídia | escrita limitada à pasta/objeto do próprio usuário em cada bucket |
+| Storage `post-media` | leitura pública da mídia | upload/delete somente sob `<auth.uid()>/<post-id>/` |
 
 Exemplo conceitual para exclusão de post:
 
@@ -241,7 +253,7 @@ A extensão `pg_trgm` e índices GIN em username/nome sustentam o padrão de bus
 
 O tema é um estado de interface, não dado remoto. A preferência é persistida localmente e aplicada à raiz do documento; quando não existe escolha, a preferência do sistema pode ser usada como valor inicial.
 
-O mesmo conteúdo usa navegação apropriada a cada largura: sidebar em desktop e navegação compacta no mobile. HTML semântico, labels, foco visível, botões reais e textos alternativos mantêm a base navegável sem depender apenas do mouse.
+O mesmo conteúdo usa navegação apropriada a cada largura: sidebar em desktop e navegação compacta no mobile. HTML semântico, labels, foco visível e botões reais mantêm a base navegável sem depender apenas do mouse. Imagens usam o texto alternativo armazenado quando ele existe; sem esse valor, os controles que abrem a mídia continuam com nomes acessíveis e a imagem usa `alt=""`, sem inventar uma descrição.
 
 ## PWA
 
