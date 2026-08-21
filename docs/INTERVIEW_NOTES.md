@@ -93,7 +93,19 @@ O navegador envia conteúdo e metadados, mas a RPC usa `auth.uid()` para preench
 
 ### O que acontece em uma falha parcial?
 
-Storage e PostgreSQL não compartilham uma transação. Na criação, os uploads acontecem antes da RPC; se um upload falhar, os anteriores são removidos, e se a RPC falhar após os uploads, o cliente confirma se o post existe antes de limpar. A RPC torna atômica apenas a parte de banco: `posts` e `post_media` entram juntos ou não entram. Se nem a verificação for conclusiva, a aplicação pede para recarregar em vez de arriscar excluir mídia válida. Na exclusão, o banco é removido primeiro e faz cascade dos metadados; a limpeza posterior do Storage é best-effort e uma falha gera aviso sem fingir que o post ainda existe.
+Storage e PostgreSQL não compartilham uma transação. Na criação, os uploads acontecem antes da RPC; se um upload falhar, os anteriores são removidos, e se a RPC falhar após os uploads, o cliente confirma se o post existe antes de limpar. A RPC torna atômica apenas a parte de banco: `posts` e, conforme o payload, `post_media` ou `polls`/`poll_options` entram juntos ou não entram. Se nem a verificação for conclusiva, a aplicação pede para recarregar em vez de arriscar excluir mídia válida. Na exclusão, o banco é removido primeiro e faz cascade dos metadados; a limpeza posterior do Storage é best-effort e uma falha gera aviso sem fingir que o post ainda existe.
+
+### Como você impede voto duplicado?
+
+`poll_votes` tem chave primária composta por (`poll_id`, `user_id`), então o PostgreSQL aceita no máximo um voto de cada perfil por enquete, inclusive sob requisições concorrentes. `vote_in_poll()` deriva o usuário de `auth.uid()` e o navegador não recebe permissão para alterar ou excluir votos. Bloquear cliques repetidos melhora a experiência, mas a garantia definitiva é do banco.
+
+### Como uma enquete encerra sem cron job?
+
+Cada enquete guarda `expires_at`. A leitura e o timer da interface usam esse timestamp para apresentar o estado encerrado, enquanto `vote_in_poll()` e um trigger comparam o prazo ao relógio do banco antes de inserir o voto. Não é preciso um job para mudar uma coluna de status: depois do prazo, a própria regra de escrita rejeita novos votos.
+
+### Por que votos estão em tabela separada?
+
+Uma linha por voto mantém o modelo normalizado e permite foreign keys, a chave única por enquete/usuário e agregações de contagem sem editar arrays ou contadores concorrentes dentro da enquete. Também separa a identidade dos votantes dos dados públicos: o frontend lê resultados agregados e apenas a própria escolha por uma RPC, não as linhas de `poll_votes`.
 
 ### Como implementou curtidas sem duplicação?
 

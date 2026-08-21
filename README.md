@@ -15,6 +15,7 @@ A aplicação é uma SPA instalável e oferece temas claro e escuro. O acesso ao
 - Feed geral e feed de pessoas seguidas.
 - Criação e exclusão das próprias publicações, com texto, até quatro imagens ou ambos.
 - Otimização das imagens no navegador, preferindo WebP e limitando o maior lado a 1.920 px, com grid responsivo e visualizador ampliado.
+- Enquetes em publicações, com duas a quatro opções, duração configurável, um voto por usuário e resultados após votar ou encerrar.
 - Curtidas com atualização otimista e rollback em caso de erro.
 - Comentários em publicações.
 - Seguir e deixar de seguir pessoas.

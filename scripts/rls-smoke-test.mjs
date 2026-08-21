@@ -49,6 +49,8 @@ async function runSmokeTest() {
   const temporaryPostByB = `[RLS smoke ${runId}] post temporário de B`
   const unauthorizedPostAsB = `[RLS smoke ${runId}] tentativa de A publicar como B`
   const temporaryPostByA = `[RLS smoke ${runId}] post temporário legítimo de A`
+  const temporaryPollQuestionByA = `[RLS smoke ${runId}] enquete temporária de A`
+  const temporaryPollQuestionByB = `[RLS smoke ${runId}] enquete temporária de B`
   const attemptedProfileName = `RLS_BLOCK_TEST_${runId.slice(0, 12)}`
   const attemptedCoverForB = `https://example.invalid/nexo-rls-smoke/${runId}/cover-b.webp`
   const temporaryCoverForA = `https://example.invalid/nexo-rls-smoke/${runId}/cover-a.webp`
@@ -62,8 +64,15 @@ async function runSmokeTest() {
   let temporaryPostByAId
   let requestedPostByAId
   let temporaryMediaByBId
+  let temporaryPollByAId
+  let temporaryPollByBId
+  let temporaryPollOptionByAId
+  let temporaryPollOptionByBId
+  let alternatePollOptionByBId
   const cleanupMediaPathsForA = new Set()
   const cleanupMediaPathsForB = new Set()
+  const cleanupPostIdsForA = new Set()
+  const cleanupPostIdsForB = new Set()
   let userACoverSnapshotCaptured = false
   let userBCoverSnapshotCaptured = false
   let ownCoverMutationAttempted = false
@@ -239,6 +248,30 @@ async function runSmokeTest() {
       detail: errorDetail(postAfterDeleteAttempt.error, 'O post temporário de B desapareceu.'),
     })
 
+    const unauthorizedPollInsert = await clientA
+      .from('polls')
+      .insert({
+        post_id: temporaryPostByBId,
+        author_id: userBId,
+        question: `[RLS smoke ${runId}] tentativa de A criar enquete para B`,
+        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      })
+      .select('id')
+
+    const unauthorizedPollInsertWasBlocked =
+      isExpectedAuthorizationError(unauthorizedPollInsert.error) &&
+      (!unauthorizedPollInsert.data || unauthorizedPollInsert.data.length === 0)
+
+    record(unauthorizedPollInsertWasBlocked, 'A NÃO conseguiu criar enquete em post de B', {
+      security: true,
+      detail: unauthorizedPollInsertWasBlocked
+        ? undefined
+        : errorDetail(
+            unauthorizedPollInsert.error,
+            'O INSERT direto de enquete não foi bloqueado explicitamente por grants/RLS.',
+          ),
+    })
+
     const mediaByBPath = `${userBId}/${temporaryPostByBId}/${randomUUID()}.webp`
     cleanupMediaPathsForB.add(mediaByBPath)
 
@@ -378,6 +411,423 @@ async function runSmokeTest() {
         security: true,
         detail: 'Não havia metadata de B para confirmar.',
       })
+    }
+
+    const pollPostByBId = randomUUID()
+    cleanupPostIdsForB.add(pollPostByBId)
+    const pollCreationByB = await clientB.rpc('create_post_with_media', {
+      p_post_id: pollPostByBId,
+      p_content: '',
+      p_media: [],
+      p_poll: {
+        question: temporaryPollQuestionByB,
+        duration_minutes: 60,
+        options: ['Opção B1', 'Opção B2'],
+      },
+    })
+
+    const pollSummaryByB = pollCreationByB.error
+      ? { data: null, error: pollCreationByB.error }
+      : await clientA.rpc('get_poll_summaries', { p_post_ids: [pollPostByBId] })
+    const pollByB = pollSummaryByB.data?.[0]
+    const pollOptionsByB = Array.isArray(pollByB?.options) ? pollByB.options : []
+    temporaryPollByBId = pollByB?.poll_id
+    temporaryPollOptionByBId = pollOptionsByB[0]?.id
+    alternatePollOptionByBId = pollOptionsByB[1]?.id
+
+    const emptyTextPollByBWasCreated =
+      !pollCreationByB.error &&
+      pollCreationByB.data === pollPostByBId &&
+      !pollSummaryByB.error &&
+      pollByB?.post_id === pollPostByBId &&
+      pollByB?.question === temporaryPollQuestionByB &&
+      pollOptionsByB.length === 2 &&
+      Number(pollByB?.total_votes) === 0
+
+    record(emptyTextPollByBWasCreated, 'B conseguiu criar enquete sem texto e A leu o resumo público', {
+      detail: errorDetail(
+        pollCreationByB.error ?? pollSummaryByB.error,
+        'A criação ou a leitura agregada da enquete de B não foi confirmada.',
+      ),
+    })
+
+    if (temporaryPollByBId) {
+      const unauthorizedPollDelete = await clientA
+        .from('polls')
+        .delete()
+        .eq('id', temporaryPollByBId)
+        .select('id')
+      const pollAfterDeleteAttempt = await clientB.rpc('get_poll_summaries', {
+        p_post_ids: [pollPostByBId],
+      })
+      const pollByBStillExists =
+        !pollAfterDeleteAttempt.error &&
+        pollAfterDeleteAttempt.data?.[0]?.poll_id === temporaryPollByBId
+      const unauthorizedPollDeleteWasBlocked =
+        pollByBStillExists &&
+        isExpectedAuthorizationError(unauthorizedPollDelete.error) &&
+        (!unauthorizedPollDelete.data || unauthorizedPollDelete.data.length === 0)
+
+      record(unauthorizedPollDeleteWasBlocked, 'A NÃO conseguiu excluir enquete de B', {
+        security: true,
+        detail: unauthorizedPollDeleteWasBlocked
+          ? undefined
+          : errorDetail(
+              unauthorizedPollDelete.error ?? pollAfterDeleteAttempt.error,
+              'A enquete de B foi excluída ou o DELETE não foi bloqueado explicitamente.',
+            ),
+      })
+    } else {
+      record(false, 'A NÃO conseguiu excluir enquete de B', {
+        security: true,
+        detail: 'O fixture de enquete de B não pôde ser preparado.',
+      })
+    }
+
+    const pollPostByAId = randomUUID()
+    cleanupPostIdsForA.add(pollPostByAId)
+    const pollCreationByA = await clientA.rpc('create_post_with_media', {
+      p_post_id: pollPostByAId,
+      p_content: '',
+      p_media: [],
+      p_poll: {
+        question: temporaryPollQuestionByA,
+        duration_minutes: 60,
+        options: ['Opção A1', 'Opção A2'],
+      },
+    })
+
+    const pollSummaryByA = pollCreationByA.error
+      ? { data: null, error: pollCreationByA.error }
+      : await clientA.rpc('get_poll_summaries', { p_post_ids: [pollPostByAId] })
+    const pollByA = pollSummaryByA.data?.[0]
+    const pollOptionsByA = Array.isArray(pollByA?.options) ? pollByA.options : []
+    temporaryPollByAId = pollByA?.poll_id
+    temporaryPollOptionByAId = pollOptionsByA[0]?.id
+
+    const ownPollWasCreated =
+      !pollCreationByA.error &&
+      pollCreationByA.data === pollPostByAId &&
+      !pollSummaryByA.error &&
+      pollByA?.post_id === pollPostByAId &&
+      pollByA?.question === temporaryPollQuestionByA &&
+      pollOptionsByA.length === 2
+
+    record(ownPollWasCreated, 'A conseguiu criar enquete legítima no próprio post', {
+      detail: errorDetail(
+        pollCreationByA.error ?? pollSummaryByA.error,
+        'A criação atômica da enquete de A não foi confirmada.',
+      ),
+    })
+
+    if (temporaryPollOptionByAId) {
+      const attemptedOptionText = `[RLS smoke ${runId}] opção alterada`
+      const immutableOptionUpdate = await clientA
+        .from('poll_options')
+        .update({ option_text: attemptedOptionText })
+        .eq('id', temporaryPollOptionByAId)
+        .select('id, option_text')
+      const pollAfterOptionUpdate = await clientA.rpc('get_poll_summaries', {
+        p_post_ids: [pollPostByAId],
+      })
+      const optionsAfterUpdate = pollAfterOptionUpdate.data?.[0]?.options
+      const optionAfterUpdate = Array.isArray(optionsAfterUpdate)
+        ? optionsAfterUpdate.find((option) => option.id === temporaryPollOptionByAId)
+        : undefined
+      const updateReturnedNoRows =
+        Array.isArray(immutableOptionUpdate.data) && immutableOptionUpdate.data.length === 0
+      const immutableOptionWasProtected =
+        !pollAfterOptionUpdate.error &&
+        optionAfterUpdate?.text === 'Opção A1' &&
+        (isExpectedAuthorizationError(immutableOptionUpdate.error) || updateReturnedNoRows)
+
+      record(immutableOptionWasProtected, 'A NÃO conseguiu alterar opções depois da publicação', {
+        security: true,
+        detail: immutableOptionWasProtected
+          ? undefined
+          : errorDetail(
+              immutableOptionUpdate.error ?? pollAfterOptionUpdate.error,
+              'Uma opção publicada foi alterada ou o bloqueio retornou um resultado inesperado.',
+            ),
+      })
+    } else {
+      record(false, 'A NÃO conseguiu alterar opções depois da publicação', {
+        security: true,
+        detail: 'O fixture de opção de A não pôde ser preparado.',
+      })
+    }
+
+    const mediaForPollPath = `${userAId}/${pollPostByAId}/${randomUUID()}.webp`
+    cleanupMediaPathsForA.add(mediaForPollPath)
+    const directMediaForPoll = await clientA
+      .from('post_media')
+      .insert({
+        post_id: pollPostByAId,
+        owner_id: userAId,
+        media_type: 'image',
+        storage_path: mediaForPollPath,
+        mime_type: 'image/webp',
+        width: 8,
+        height: 8,
+        position: 0,
+        alt_text: null,
+      })
+      .select('id')
+    const mediaForPollAfterAttempt = await clientA
+      .from('post_media')
+      .select('id')
+      .eq('storage_path', mediaForPollPath)
+      .maybeSingle()
+    const directMediaForPollWasBlocked =
+      directMediaForPoll.error?.code === '23514' &&
+      (!directMediaForPoll.data || directMediaForPoll.data.length === 0) &&
+      !mediaForPollAfterAttempt.error &&
+      !mediaForPollAfterAttempt.data
+
+    record(directMediaForPollWasBlocked, 'Write direto NÃO conseguiu adicionar mídia a post com enquete', {
+      security: true,
+      detail: directMediaForPollWasBlocked
+        ? undefined
+        : errorDetail(
+            directMediaForPoll.error ?? mediaForPollAfterAttempt.error,
+            'O trigger de exclusividade não bloqueou o INSERT direto de post_media.',
+          ),
+    })
+
+    const mixedPostId = randomUUID()
+    cleanupPostIdsForA.add(mixedPostId)
+    const mixedMediaPath = `${userAId}/${mixedPostId}/${randomUUID()}.webp`
+    cleanupMediaPathsForA.add(mixedMediaPath)
+    const mixedPostCreation = await clientA.rpc('create_post_with_media', {
+      p_post_id: mixedPostId,
+      p_content: 'Tentativa controlada de combinar mídia e enquete',
+      p_media: [{
+        storage_path: mixedMediaPath,
+        mime_type: 'image/webp',
+        width: 8,
+        height: 8,
+        position: 0,
+        alt_text: null,
+      }],
+      p_poll: {
+        question: 'Esta combinação deve falhar?',
+        duration_minutes: 60,
+        options: ['Sim', 'Não'],
+      },
+    })
+    const mixedPostAfterAttempt = await clientA
+      .from('posts')
+      .select('id')
+      .eq('id', mixedPostId)
+      .maybeSingle()
+    const mixedPostWasRejected =
+      Boolean(mixedPostCreation.error) &&
+      !mixedPostAfterAttempt.error &&
+      !mixedPostAfterAttempt.data
+
+    record(mixedPostWasRejected, 'A NÃO conseguiu combinar mídia e enquete no mesmo post', {
+      security: true,
+      detail: mixedPostWasRejected
+        ? undefined
+        : errorDetail(
+            mixedPostCreation.error ?? mixedPostAfterAttempt.error,
+            'A criação atômica aceitou mídia e enquete juntas ou deixou um post parcial.',
+          ),
+    })
+
+    const invalidOptionCountPostId = randomUUID()
+    cleanupPostIdsForA.add(invalidOptionCountPostId)
+    const invalidOptionCountCreation = await clientA.rpc('create_post_with_media', {
+      p_post_id: invalidOptionCountPostId,
+      p_content: '',
+      p_media: [],
+      p_poll: {
+        question: 'Enquete inválida com uma opção',
+        duration_minutes: 60,
+        options: ['Única opção'],
+      },
+    })
+    const invalidOptionCountPost = await clientA
+      .from('posts')
+      .select('id')
+      .eq('id', invalidOptionCountPostId)
+      .maybeSingle()
+    const invalidOptionCountWasRejected =
+      Boolean(invalidOptionCountCreation.error) &&
+      !invalidOptionCountPost.error &&
+      !invalidOptionCountPost.data
+
+    record(invalidOptionCountWasRejected, 'Enquete com menos de duas opções foi rejeitada atomicamente', {
+      detail: invalidOptionCountWasRejected
+        ? undefined
+        : errorDetail(
+            invalidOptionCountCreation.error ?? invalidOptionCountPost.error,
+            'A enquete inválida foi aceita ou deixou um post parcial.',
+          ),
+    })
+
+    const duplicateNormalizedOptionsPostId = randomUUID()
+    cleanupPostIdsForA.add(duplicateNormalizedOptionsPostId)
+    const duplicateNormalizedOptionsCreation = await clientA.rpc('create_post_with_media', {
+      p_post_id: duplicateNormalizedOptionsPostId,
+      p_content: '',
+      p_media: [],
+      p_poll: {
+        question: 'Enquete inválida com opções equivalentes',
+        duration_minutes: 60,
+        options: ['A  B', 'a b'],
+      },
+    })
+    const duplicateNormalizedOptionsPost = await clientA
+      .from('posts')
+      .select('id')
+      .eq('id', duplicateNormalizedOptionsPostId)
+      .maybeSingle()
+    const duplicateNormalizedOptionsWereRejected =
+      Boolean(duplicateNormalizedOptionsCreation.error) &&
+      !duplicateNormalizedOptionsPost.error &&
+      !duplicateNormalizedOptionsPost.data
+
+    record(
+      duplicateNormalizedOptionsWereRejected,
+      'Opções equivalentes após normalizar espaços e caixa foram rejeitadas atomicamente',
+      {
+        detail: duplicateNormalizedOptionsWereRejected
+          ? undefined
+          : errorDetail(
+              duplicateNormalizedOptionsCreation.error ?? duplicateNormalizedOptionsPost.error,
+              'A enquete aceitou opções duplicadas após normalização ou deixou um post parcial.',
+            ),
+      },
+    )
+
+    if (
+      temporaryPollByAId &&
+      temporaryPollByBId &&
+      temporaryPollOptionByBId &&
+      alternatePollOptionByBId &&
+      temporaryPollOptionByAId
+    ) {
+      const wrongPollOptionVote = await clientA.rpc('vote_in_poll', {
+        p_poll_id: temporaryPollByBId,
+        p_option_id: temporaryPollOptionByAId,
+      })
+      const wrongPollOptionWasRejected =
+        Boolean(wrongPollOptionVote.error) && wrongPollOptionVote.data == null
+
+      record(wrongPollOptionWasRejected, 'A NÃO conseguiu votar usando opção de outra enquete', {
+        security: true,
+        detail: wrongPollOptionWasRejected
+          ? undefined
+          : errorDetail(
+              wrongPollOptionVote.error,
+              'vote_in_poll aceitou uma opção que não pertence à enquete.',
+            ),
+      })
+
+      const legitimateVote = await clientA.rpc('vote_in_poll', {
+        p_poll_id: temporaryPollByBId,
+        p_option_id: temporaryPollOptionByBId,
+      })
+      const legitimateVoteWasCreated =
+        !legitimateVote.error && legitimateVote.data === temporaryPollOptionByBId
+
+      record(legitimateVoteWasCreated, 'A conseguiu votar uma vez em opção válida de B', {
+        detail: errorDetail(legitimateVote.error, 'O voto legítimo não foi criado.'),
+      })
+
+      const secondVote = await clientA.rpc('vote_in_poll', {
+        p_poll_id: temporaryPollByBId,
+        p_option_id: alternatePollOptionByBId,
+      })
+      const secondVoteWasRejected =
+        secondVote.error?.code === '23505' && secondVote.data == null
+
+      record(secondVoteWasRejected, 'A NÃO conseguiu trocar ou repetir seu voto definitivo', {
+        security: true,
+        detail: secondVoteWasRejected
+          ? undefined
+          : errorDetail(secondVote.error, 'Um segundo voto foi aceito ou falhou por motivo inesperado.'),
+      })
+
+      const summaryAfterVote = await clientA.rpc('get_poll_summaries', {
+        p_post_ids: [pollPostByBId],
+      })
+      const confirmedSummary = summaryAfterVote.data?.[0]
+      const voteSummaryIsCorrect =
+        !summaryAfterVote.error &&
+        confirmedSummary?.viewer_option_id === temporaryPollOptionByBId &&
+        Number(confirmedSummary?.total_votes) === 1
+
+      record(voteSummaryIsCorrect, 'Resumo agregado mostra o único voto de A sem expor eleitores', {
+        detail: errorDetail(
+          summaryAfterVote.error,
+          'O total ou a opção escolhida pelo usuário atual ficou inconsistente.',
+        ),
+      })
+
+      const forgedVote = await clientA
+        .from('poll_votes')
+        .insert({
+          poll_id: temporaryPollByBId,
+          option_id: alternatePollOptionByBId,
+          user_id: userBId,
+        })
+        .select('poll_id')
+      const forgedVoteWasBlocked =
+        isExpectedAuthorizationError(forgedVote.error) &&
+        (!forgedVote.data || forgedVote.data.length === 0)
+
+      record(forgedVoteWasBlocked, 'A NÃO conseguiu votar em nome de B', {
+        security: true,
+        detail: forgedVoteWasBlocked
+          ? undefined
+          : errorDetail(forgedVote.error, 'O INSERT direto adulterado não foi bloqueado.'),
+      })
+
+      const summaryAfterForgery = await clientA.rpc('get_poll_summaries', {
+        p_post_ids: [pollPostByBId],
+      })
+      const forgedVoteDidNotChangeTotal =
+        !summaryAfterForgery.error && Number(summaryAfterForgery.data?.[0]?.total_votes) === 1
+
+      record(forgedVoteDidNotChangeTotal, 'Tentativa de voto adulterado não alterou o total', {
+        security: true,
+        detail: errorDetail(
+          summaryAfterForgery.error,
+          'O total de votos mudou depois do INSERT adulterado.',
+        ),
+      })
+
+      const exposedVoters = await clientA
+        .from('poll_votes')
+        .select('poll_id, option_id, user_id')
+        .eq('poll_id', temporaryPollByBId)
+      const voterIdentitiesArePrivate =
+        isExpectedAuthorizationError(exposedVoters.error) &&
+        (!exposedVoters.data || exposedVoters.data.length === 0)
+
+      record(voterIdentitiesArePrivate, 'Identidades dos eleitores NÃO são legíveis pelo cliente', {
+        security: true,
+        detail: voterIdentitiesArePrivate
+          ? undefined
+          : errorDetail(exposedVoters.error, 'A tabela poll_votes expôs identidades ao navegador.'),
+      })
+    } else {
+      for (const label of [
+        'A NÃO conseguiu votar usando opção de outra enquete',
+        'A conseguiu votar uma vez em opção válida de B',
+        'A NÃO conseguiu trocar ou repetir seu voto definitivo',
+        'Resumo agregado mostra o único voto de A sem expor eleitores',
+        'A NÃO conseguiu votar em nome de B',
+        'Tentativa de voto adulterado não alterou o total',
+        'Identidades dos eleitores NÃO são legíveis pelo cliente',
+      ]) {
+        record(false, label, {
+          security: label.includes('NÃO') || label.includes('Identidades'),
+          detail: 'Os fixtures de enquete não puderam ser preparados.',
+        })
+      }
     }
 
     const unauthorizedProfileUpdate = await clientA
@@ -713,6 +1163,54 @@ async function runSmokeTest() {
         })
       } else {
         console.log('[INFO] Post temporário solicitado por A foi removido ou já estava ausente.')
+      }
+    }
+
+    if (userAId && cleanupPostIdsForA.size > 0) {
+      const pollCleanupA = await clientA
+        .from('posts')
+        .delete()
+        .eq('author_id', userAId)
+        .in('id', [...cleanupPostIdsForA])
+        .select('id')
+      const pollCleanupVerificationA = await clientA
+        .from('posts')
+        .select('id')
+        .in('id', [...cleanupPostIdsForA])
+
+      if (pollCleanupVerificationA.error || (pollCleanupVerificationA.data?.length ?? 0) > 0) {
+        record(false, 'CRÍTICO: falha ao limpar fixtures de enquete associados a A', {
+          detail: errorDetail(
+            pollCleanupVerificationA.error ?? pollCleanupA.error,
+            'Um ou mais posts de enquete de A continuam existentes.',
+          ),
+        })
+      } else {
+        console.log('[INFO] Fixtures de enquete associados a A foram removidos ou já estavam ausentes.')
+      }
+    }
+
+    if (userBId && cleanupPostIdsForB.size > 0) {
+      const pollCleanupB = await clientB
+        .from('posts')
+        .delete()
+        .eq('author_id', userBId)
+        .in('id', [...cleanupPostIdsForB])
+        .select('id')
+      const pollCleanupVerificationB = await clientB
+        .from('posts')
+        .select('id')
+        .in('id', [...cleanupPostIdsForB])
+
+      if (pollCleanupVerificationB.error || (pollCleanupVerificationB.data?.length ?? 0) > 0) {
+        record(false, 'CRÍTICO: falha ao limpar fixtures de enquete associados a B', {
+          detail: errorDetail(
+            pollCleanupVerificationB.error ?? pollCleanupB.error,
+            'Um ou mais posts de enquete de B continuam existentes.',
+          ),
+        })
+      } else {
+        console.log('[INFO] Fixtures de enquete associados a B foram removidos ou já estavam ausentes.')
       }
     }
 

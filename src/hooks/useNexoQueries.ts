@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { useCallback } from 'react'
 import { createComment, deleteComment, getComments } from '../services/comments'
 import { getDashboardStats, getPostsOverTime } from '../services/dashboard'
 import {
@@ -8,6 +9,7 @@ import {
   getPost,
   getPostsByAuthor,
   setPostLiked,
+  voteInPoll,
   type CreatePostInput,
   type DeletePostInput,
 } from '../services/posts'
@@ -24,6 +26,15 @@ import type { Post } from '../types/models'
 
 type LikeVariables = { userId: string; postId: string; authorId: string; shouldLike: boolean }
 type DeletePostVariables = DeletePostInput & { authorId: string }
+type PollQueryVariables = {
+  userId: string
+  postId: string
+  authorId: string
+}
+type PollCacheVariables = PollQueryVariables & {
+  pollId: string
+  optionId: string
+}
 
 function updatePostLike(post: Post, variables: LikeVariables): Post {
   if (post.id !== variables.postId || post.likedByMe === variables.shouldLike) return post
@@ -32,6 +43,40 @@ function updatePostLike(post: Post, variables: LikeVariables): Post {
     likedByMe: variables.shouldLike,
     likeCount: Math.max(0, post.likeCount + (variables.shouldLike ? 1 : -1)),
   }
+}
+
+function updatePostPollVote(post: Post, variables: PollCacheVariables): Post {
+  if (
+    post.id !== variables.postId ||
+    post.poll?.id !== variables.pollId ||
+    post.poll.viewerOptionId !== null ||
+    !post.poll.options.some((option) => option.id === variables.optionId)
+  ) {
+    return post
+  }
+
+  return {
+    ...post,
+    poll: {
+      ...post.poll,
+      viewerOptionId: variables.optionId,
+      totalVotes: post.poll.totalVotes + 1,
+      options: post.poll.options.map((option) => option.id === variables.optionId
+        ? { ...option, voteCount: option.voteCount + 1 }
+        : option),
+    },
+  }
+}
+
+async function invalidatePollQueries(client: QueryClient, variables: PollQueryVariables) {
+  await Promise.all([
+    client.invalidateQueries({ queryKey: ['feed', variables.userId] }),
+    client.invalidateQueries({ queryKey: ['post', variables.postId, variables.userId], exact: true }),
+    client.invalidateQueries({
+      queryKey: ['author-posts', variables.authorId, variables.userId],
+      exact: true,
+    }),
+  ])
 }
 
 export function useCurrentProfile(userId?: string) {
@@ -127,6 +172,38 @@ export function useToggleLike() {
       ])
     },
   })
+}
+
+export function useVoteInPoll() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ pollId, optionId }: PollCacheVariables) => voteInPoll({ pollId, optionId }),
+    onSuccess: (_selectedOptionId, variables) => {
+      const feedKey = ['feed', variables.userId] as const
+      const postKey = ['post', variables.postId, variables.userId] as const
+      const authorPostsKey = ['author-posts', variables.authorId, variables.userId] as const
+
+      for (const [queryKey] of client.getQueriesData<Post[]>({ queryKey: feedKey })) {
+        client.setQueryData<Post[]>(queryKey, (current) =>
+          current?.map((post) => updatePostPollVote(post, variables)))
+      }
+      client.setQueryData<Post | null>(postKey, (current) =>
+        current ? updatePostPollVote(current, variables) : current)
+      client.setQueryData<Post[]>(authorPostsKey, (current) =>
+        current?.map((post) => updatePostPollVote(post, variables)))
+    },
+    onSettled: async (_data, _error, variables) => {
+      await invalidatePollQueries(client, variables)
+    },
+  })
+}
+
+export function useRefreshPostPoll() {
+  const client = useQueryClient()
+  return useCallback(
+    (variables: PollQueryVariables) => invalidatePollQueries(client, variables),
+    [client],
+  )
 }
 
 export function useProfile(username: string, viewerId: string) {

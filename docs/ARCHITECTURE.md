@@ -114,17 +114,37 @@ O UUID do perfil corresponde ao UUID do usuário autenticado. `auth.users` cuida
 profiles 1 ─── N posts 1 ─── N post_media
 ```
 
-Cada post guarda a chave do autor, texto e timestamps; pode conter texto, mídia ou ambos. `post_media` mantém uma linha por imagem, com ordem entre 0 e 3, path no Storage, MIME, dimensões e texto alternativo opcional. A chave estrangeira composta (`post_id`, `owner_id`) exige que o dono da mídia também seja o autor do post, enquanto constraints de posição limitam cada publicação a quatro anexos sem criar quatro colunas de URL. Constraint triggers `deferrable initially deferred` verificam o estado final da transação: a RPC pode inserir o post antes das mídias, mas excluir diretamente o último anexo de um post sem texto é rejeitado para que ele nunca fique vazio. Um trigger anterior à exclusão bloqueia a linha do post durante a transação e serializa tentativas concorrentes de remover anexos.
+Cada post guarda a chave do autor, texto e timestamps; pode conter texto, até quatro imagens, uma enquete, ou texto combinado com imagens ou com uma enquete. Imagens e enquete não coexistem na mesma publicação. `post_media` mantém uma linha por imagem, com ordem entre 0 e 3, path no Storage, MIME, dimensões e texto alternativo opcional. A chave estrangeira composta (`post_id`, `owner_id`) exige que o dono da mídia também seja o autor do post, enquanto constraints de posição limitam cada publicação a quatro anexos sem criar quatro colunas de URL. Constraint triggers `deferrable initially deferred` verificam o estado final da transação: a RPC pode inserir o post antes das mídias, mas excluir diretamente o último anexo de um post sem texto é rejeitado para que ele nunca fique vazio. Um trigger anterior à exclusão bloqueia a linha do post durante a transação e serializa tentativas concorrentes de remover anexos.
 
 O bucket público `post-media` aceita JPEG, PNG, WebP e AVIF de até 8 MiB. `storage_path` é a referência persistida e o frontend deriva a URL pública a partir do bucket; assim, o banco não duplica a configuração da origem pública. A coluna antiga `posts.image_url` permanece apenas para leitura de posts legados quando não há linhas em `post_media`. Novas criações gravam `image_url` como `null`, e o navegador não conserva grant de insert/update para essa coluna.
 
 Antes do upload, o navegador respeita a orientação e a proporção da imagem, sem crop, reduz o maior lado para no máximo 1.920 pixels e tenta gerar WebP. Se o navegador não codificar WebP, uma imagem que não precisava ser reduzida pode manter o arquivo original; uma imagem redimensionada usa fallback JPEG ou PNG com MIME e extensão coerentes. O composer permite substituir e remover imagens antes de publicar; novas mídias não expõem edição de texto alternativo nesta versão, mas valores já armazenados continuam sendo renderizados. Feed, perfil e detalhe compartilham a mesma apresentação: uma imagem preserva sua proporção, enquanto duas a quatro usam um grid editorial; o visualizador ampliado sempre contém a imagem completa e oferece fechamento, navegação por botões e teclado e gerenciamento de foco.
 
-Os objetos precisam existir antes da escrita no banco. O cliente gera o UUID do post, faz upload em `<auth.uid()>/<post-id>/<arquivo>` e chama `create_post_with_media()`. Essa RPC `security definer` só pode ser executada pelo papel `authenticated`, fixa um `search_path` vazio e deriva autor e proprietário de `auth.uid()`; ela cria `posts` e `post_media` na mesma transação, portanto uma falha no banco não deixa apenas metade desses registros. Se upload ou criação falhar e o banco confirmar que o post não existe, o cliente tenta remover os objetos já enviados. Quando a resposta da RPC é ambígua, ele consulta o post antes de decidir, evitando apagar mídia de uma publicação que possa ter sido criada.
+Os objetos precisam existir antes da escrita no banco. O cliente gera o UUID do post, faz upload em `<auth.uid()>/<post-id>/<arquivo>` e chama `create_post_with_media()`. Essa RPC `security definer` só pode ser executada pelo papel `authenticated`, fixa um `search_path` vazio e deriva autor e proprietário de `auth.uid()`; ela cria o post e, conforme o payload, suas linhas de mídia ou de enquete na mesma transação, portanto uma falha no banco não deixa apenas metade desses registros. Se upload ou criação falhar e o banco confirmar que o post não existe, o cliente tenta remover os objetos já enviados. Quando a resposta da RPC é ambígua, ele consulta o post antes de decidir, evitando apagar mídia de uma publicação que possa ter sido criada.
 
 Na exclusão, a ordem é inversa: o post do próprio autor é removido primeiro; foreign keys com cascade eliminam `post_media` e as relações dependentes no banco. Só depois o cliente tenta apagar os paths previamente lidos do Storage. Essa limpeza é best-effort: uma falha gera aviso, mas não apresenta como fracassada uma exclusão de banco que já ocorreu.
 
 A migration `20260819020000_add_post_media.sql` declara tabela, constraints, bucket, policies, grants e RPC. Sua presença no repositório não significa que ela tenha sido aplicada ou validada contra um projeto Supabase remoto.
+
+### Enquetes
+
+```text
+posts 1 ─── 0..1 polls 1 ─── 2..4 poll_options
+                       └── 1 ─── N poll_votes N ─── 1 profiles
+poll_options 1 ─── N poll_votes
+```
+
+`polls` guarda pergunta e `expires_at`, com no máximo uma enquete por post e uma foreign key composta que obriga seu autor a coincidir com o autor da publicação. `poll_options` mantém de duas a quatro opções ordenadas; pergunta e opções têm espaços normalizados, e opções repetidas após essa normalização e comparação case-insensitive são rejeitadas. `poll_votes` registra uma escolha por perfil; sua chave primária (`poll_id`, `user_id`) impede um segundo voto, enquanto a foreign key composta garante que a opção escolhida pertence àquela enquete. A exclusão do post remove enquete, opções e votos por cascade.
+
+No composer, imagens e enquete são alternativas mutuamente exclusivas. A versão de quatro argumentos de `create_post_with_media()` recebe pergunta, duração e opções, deriva a autoria de `auth.uid()` e cria post, enquete e opções atomicamente; o overload de três argumentos preserva clientes de texto/mídia. A validação do banco aceita somente as durações oferecidas pela interface e também impede que escritas diretas ou concorrentes combinem `post_media` e `polls`.
+
+O voto passa por `vote_in_poll(p_poll_id, p_option_id)`, que deriva o usuário da sessão, confere se a opção pertence à enquete e rejeita votos depois do prazo usando o relógio do banco. A interface bloqueia repetição enquanto a requisição está pendente; após o sucesso, atualiza o cache e revalida feed, post individual e posts do autor. Antes do voto são exibidas as opções; depois do voto ou da expiração, aparecem contagens e percentuais.
+
+Não há cron job para encerrar enquetes. `expires_at` define o estado na leitura e no timer da interface, enquanto a RPC e um trigger validam novamente o prazo no momento do insert. Assim, a linha não precisa mudar de status para que novos votos sejam bloqueados.
+
+RLS permite leitura pública de `polls` e `poll_options` vinculadas a posts existentes. O navegador não recebe escrita direta nessas tabelas nem leitura de `poll_votes`: criação e voto passam pelas RPCs autenticadas. `get_poll_summaries()` retorna agregados em lote e, quando existe sessão, somente a opção escolhida pelo próprio usuário; identidades dos demais votantes não são expostas.
+
+A migration `20260820000000_add_post_polls.sql` declara tabelas, invariantes, RLS, grants e RPCs das enquetes. Sua presença no repositório não significa que ela tenha sido aplicada ou testada contra um projeto Supabase remoto.
 
 ### Curtidas
 
@@ -193,6 +213,8 @@ Resumo das garantias esperadas no schema:
 | `profiles` | pública na API para perfil/busca | profile criado pelo trigger; update somente de `name`, `bio`, `avatar_url` e `cover_url` do próprio UUID |
 | `posts` | pública conforme o produto | criação pela RPC com autor derivado de `auth.uid()`; delete somente do autor; update direto indisponível ao navegador |
 | `post_media` | pública quando o post existe | insert/delete somente do dono e vinculado a post do mesmo autor; sem update pelo navegador |
+| `polls` e `poll_options` | públicas quando o post existe | criação somente pela RPC autenticada; sem escrita direta pelo navegador |
+| `poll_votes` | sem leitura direta; apenas agregados e a escolha do próprio usuário pela RPC | voto somente pela RPC autenticada; sem update/delete pelo navegador |
 | `likes` | leitura necessária aos contadores | insert/delete somente quando usuário = `auth.uid()` |
 | `comments` | pública junto à publicação | insert/update/delete somente quando autor = `auth.uid()` |
 | `follows` | leitura necessária aos perfis | insert/delete somente quando seguidor = `auth.uid()` |

@@ -1,4 +1,4 @@
-import { ImagePlus, RefreshCw, SendHorizontal, Trash2 } from 'lucide-react'
+import { ImagePlus, ListChecks, Plus, RefreshCw, SendHorizontal, Trash2, X } from 'lucide-react'
 import {
   useEffect,
   useRef,
@@ -10,21 +10,35 @@ import {
 import { toast } from 'sonner'
 import { useCreatePost } from '../../hooks/useNexoQueries'
 import {
+  POLL_DURATION_OPTIONS,
+  POLL_MAX_OPTIONS,
+  POLL_MIN_OPTIONS,
+  POLL_OPTION_MAX_LENGTH,
+  POLL_QUESTION_MAX_LENGTH,
   POST_MAX_LENGTH,
   POST_MEDIA_MAX_ITEMS,
 } from '../../lib/constants'
 import type { CreatePostMediaInput } from '../../services/posts'
-import type { ProfileSummary } from '../../types/models'
+import type { CreatePollInput, PollDurationMinutes, ProfileSummary } from '../../types/models'
 import { ClipboardImageError, readPastedImage } from '../../utils/clipboard'
 import {
   POST_IMAGE_MIME_TYPES,
   processPostImage,
 } from '../../utils/imageProcessing'
 import { getErrorMessage } from '../../utils/errors'
+import { validatePollInput } from '../../utils/polls'
 import { Avatar } from '../ui/Avatar'
 import { Button } from '../ui/Button'
 
 type ComposerMedia = CreatePostMediaInput & { id: string }
+
+function createPollDraft(): CreatePollInput {
+  return {
+    question: '',
+    options: ['', ''],
+    durationMinutes: 1440,
+  }
+}
 
 interface ComposerPreviewImageProps {
   file: File
@@ -58,23 +72,50 @@ function shouldContainInPreview(width: number, height: number, mediaCount: numbe
 export function PostComposer({ userId, profile }: { userId: string; profile?: ProfileSummary }) {
   const [content, setContent] = useState('')
   const [media, setMedia] = useState<ComposerMedia[]>([])
+  const [poll, setPoll] = useState<CreatePollInput | null>(null)
   const [preparing, setPreparing] = useState(false)
   const [dragging, setDragging] = useState(false)
   const preparingRef = useRef(false)
   const submittingRef = useRef(false)
+  const mediaRef = useRef<ComposerMedia[]>([])
+  const pollRef = useRef<CreatePollInput | null>(null)
   const dragDepthRef = useRef(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const replacementInputRef = useRef<HTMLInputElement>(null)
   const replacementIndexRef = useRef<number | null>(null)
+  const pollQuestionRef = useRef<HTMLInputElement>(null)
+  const pollOptionRefs = useRef<Array<HTMLInputElement | null>>([])
   const mutation = useCreatePost(userId)
   const remaining = POST_MAX_LENGTH - content.length
   const busy = preparing || mutation.isPending
-  const canSubmit = (content.trim().length > 0 || media.length > 0) && remaining >= 0 && !busy
+  const pollValidation = poll ? validatePollInput(poll) : null
+  const normalizedPoll = pollValidation?.valid ? pollValidation.poll : null
+  const canSubmit =
+    (content.trim().length > 0 || media.length > 0 || normalizedPoll !== null) &&
+    (poll === null || normalizedPoll !== null) &&
+    remaining >= 0 &&
+    !busy
+
+  function replaceMedia(nextMedia: ComposerMedia[]) {
+    mediaRef.current = nextMedia
+    setMedia(nextMedia)
+  }
+
+  function replacePoll(nextPoll: CreatePollInput | null) {
+    pollRef.current = nextPoll
+    setPoll(nextPoll)
+  }
 
   async function prepareFiles(files: readonly File[], replacementIndex: number | null = null) {
     if (preparingRef.current || submittingRef.current || mutation.isPending || files.length === 0) return
+    if (pollRef.current) {
+      toast.error('Remova a enquete antes de adicionar imagens.')
+      return
+    }
 
-    const available = replacementIndex === null ? POST_MEDIA_MAX_ITEMS - media.length : 1
+    const available = replacementIndex === null
+      ? POST_MEDIA_MAX_ITEMS - mediaRef.current.length
+      : 1
     if (available <= 0) {
       toast.error(`Você pode adicionar até ${POST_MEDIA_MAX_ITEMS} imagens por publicação.`)
       return
@@ -99,10 +140,14 @@ export function PostComposer({ userId, profile }: { userId: string; profile?: Pr
         })
       }
 
-      if (replacementIndex === null) {
-        setMedia((current) => [...current, ...prepared].slice(0, POST_MEDIA_MAX_ITEMS))
+      if (pollRef.current) {
+        toast.error('Remova a enquete antes de adicionar imagens.')
+      } else if (replacementIndex === null) {
+        replaceMedia([...mediaRef.current, ...prepared].slice(0, POST_MEDIA_MAX_ITEMS))
       } else if (prepared[0]) {
-        setMedia((current) => current.map((item, index) => index === replacementIndex ? prepared[0] : item))
+        replaceMedia(mediaRef.current.map(
+          (item, index) => index === replacementIndex ? prepared[0] : item,
+        ))
       }
     } catch (error) {
       toast.error(getErrorMessage(error, 'Não foi possível preparar a imagem.'))
@@ -115,14 +160,24 @@ export function PostComposer({ userId, profile }: { userId: string; profile?: Pr
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
     if (!canSubmit || preparingRef.current || submittingRef.current) return
+    const currentPollValidation = pollRef.current ? validatePollInput(pollRef.current) : null
+    if (currentPollValidation && !currentPollValidation.valid) {
+      toast.error(currentPollValidation.error)
+      return
+    }
+    const submittedPoll = currentPollValidation?.valid ? currentPollValidation.poll : null
     submittingRef.current = true
     try {
       await mutation.mutateAsync({
         content,
-        media: media.map(({ file, width, height, altText }) => ({ file, width, height, altText })),
+        media: mediaRef.current.map(
+          ({ file, width, height, altText }) => ({ file, width, height, altText }),
+        ),
+        poll: submittedPoll,
       })
       setContent('')
-      setMedia([])
+      replaceMedia([])
+      replacePoll(null)
       toast.success('Publicação criada.')
     } catch (error) {
       toast.error(getErrorMessage(error, 'Não foi possível publicar.'))
@@ -136,8 +191,62 @@ export function PostComposer({ userId, profile }: { userId: string; profile?: Pr
     void prepareFiles(Array.from(files))
   }
 
+  function requestMediaSelection() {
+    if (busy || preparingRef.current || submittingRef.current) return
+    if (pollRef.current) {
+      toast.error('Remova a enquete antes de adicionar imagens.')
+      return
+    }
+    fileInputRef.current?.click()
+  }
+
+  function addPoll() {
+    if (busy || preparingRef.current || submittingRef.current || pollRef.current) return
+    if (mediaRef.current.length > 0) {
+      toast.error('Remova as imagens antes de adicionar uma enquete.')
+      return
+    }
+    dragDepthRef.current = 0
+    setDragging(false)
+    replacePoll(createPollDraft())
+    requestAnimationFrame(() => pollQuestionRef.current?.focus())
+  }
+
+  function removePoll() {
+    if (busy || preparingRef.current || submittingRef.current) return
+    replacePoll(null)
+  }
+
+  function updatePollOption(index: number, value: string) {
+    const current = pollRef.current
+    if (!current) return
+    replacePoll({
+      ...current,
+      options: current.options.map((option, optionIndex) => optionIndex === index ? value : option),
+    })
+  }
+
+  function addPollOption() {
+    if (busy || preparingRef.current || submittingRef.current) return
+    const current = pollRef.current
+    if (!current || current.options.length >= POLL_MAX_OPTIONS) return
+    const nextOptionIndex = current.options.length
+    replacePoll({ ...current, options: [...current.options, ''] })
+    requestAnimationFrame(() => pollOptionRefs.current[nextOptionIndex]?.focus())
+  }
+
+  function removePollOption(index: number) {
+    if (busy || preparingRef.current || submittingRef.current) return
+    const current = pollRef.current
+    if (!current || current.options.length <= POLL_MIN_OPTIONS) return
+    replacePoll({
+      ...current,
+      options: current.options.filter((_, optionIndex) => optionIndex !== index),
+    })
+  }
+
   function requestReplacement(index: number) {
-    if (busy) return
+    if (busy || preparingRef.current || submittingRef.current) return
     replacementIndexRef.current = index
     replacementInputRef.current?.click()
   }
@@ -150,8 +259,8 @@ export function PostComposer({ userId, profile }: { userId: string; profile?: Pr
   }
 
   function removeMedia(id: string) {
-    if (busy) return
-    setMedia((current) => current.filter((item) => item.id !== id))
+    if (busy || preparingRef.current || submittingRef.current) return
+    replaceMedia(mediaRef.current.filter((item) => item.id !== id))
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
@@ -171,7 +280,7 @@ export function PostComposer({ userId, profile }: { userId: string; profile?: Pr
   function handleDragEnter(event: DragEvent<HTMLFormElement>) {
     if (!transferContainsFiles(event)) return
     event.preventDefault()
-    if (busy) return
+    if (busy || pollRef.current) return
     dragDepthRef.current += 1
     setDragging(true)
   }
@@ -179,7 +288,7 @@ export function PostComposer({ userId, profile }: { userId: string; profile?: Pr
   function handleDragOver(event: DragEvent<HTMLFormElement>) {
     if (!transferContainsFiles(event)) return
     event.preventDefault()
-    event.dataTransfer.dropEffect = busy ? 'none' : 'copy'
+    event.dataTransfer.dropEffect = busy || pollRef.current ? 'none' : 'copy'
   }
 
   function handleDragLeave(event: DragEvent<HTMLFormElement>) {
@@ -269,6 +378,102 @@ export function PostComposer({ userId, profile }: { userId: string; profile?: Pr
 
         {preparing && <p className="composer-media-status" role="status">Otimizando imagens…</p>}
 
+        {poll && (
+          <section className="composer-poll" aria-label="Enquete">
+            <div className="composer-poll-header">
+              <span className="composer-poll-title">
+                <ListChecks aria-hidden="true" />
+                Enquete
+              </span>
+              <button
+                type="button"
+                className="composer-poll-remove"
+                onClick={removePoll}
+                disabled={busy}
+                aria-label="Remover enquete"
+              >
+                <X aria-hidden="true" />
+                Remover
+              </button>
+            </div>
+
+            <label className="composer-poll-field">
+              <span>Pergunta</span>
+              <input
+                ref={pollQuestionRef}
+                type="text"
+                value={poll.question}
+                onChange={(event) => replacePoll({ ...poll, question: event.target.value })}
+                maxLength={POLL_QUESTION_MAX_LENGTH}
+                placeholder="Faça uma pergunta"
+                disabled={busy}
+              />
+            </label>
+
+            <div className="composer-poll-options" role="group" aria-label="Opções da enquete">
+              {poll.options.map((option, index) => (
+                <div className="composer-poll-option" key={index}>
+                  <label>
+                    <span className="sr-only">Opção {index + 1}</span>
+                    <span className="composer-poll-option-number" aria-hidden="true">{index + 1}</span>
+                    <input
+                      ref={(node) => { pollOptionRefs.current[index] = node }}
+                      type="text"
+                      value={option}
+                      onChange={(event) => updatePollOption(index, event.target.value)}
+                      maxLength={POLL_OPTION_MAX_LENGTH}
+                      placeholder={`Opção ${index + 1}`}
+                      disabled={busy}
+                    />
+                  </label>
+                  {poll.options.length > POLL_MIN_OPTIONS && (
+                    <button
+                      type="button"
+                      className="composer-poll-option-remove"
+                      onClick={() => removePollOption(index)}
+                      disabled={busy}
+                      aria-label={`Remover opção ${index + 1}`}
+                    >
+                      <X aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="composer-poll-settings">
+              <button
+                type="button"
+                className="composer-poll-add-option"
+                onClick={addPollOption}
+                disabled={busy || poll.options.length >= POLL_MAX_OPTIONS}
+              >
+                <Plus aria-hidden="true" />
+                Adicionar opção
+              </button>
+              <label className="composer-poll-duration">
+                <span>Duração</span>
+                <select
+                  value={poll.durationMinutes}
+                  onChange={(event) => replacePoll({
+                    ...poll,
+                    durationMinutes: Number(event.target.value) as PollDurationMinutes,
+                  })}
+                  disabled={busy}
+                >
+                  {POLL_DURATION_OPTIONS.map((duration) => (
+                    <option key={duration.minutes} value={duration.minutes}>{duration.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {pollValidation && !pollValidation.valid && (
+              <p className="composer-poll-validation" aria-live="polite">{pollValidation.error}</p>
+            )}
+          </section>
+        )}
+
         <div className="composer-footer">
           <div className="composer-media-actions">
             <input
@@ -297,13 +502,24 @@ export function PostComposer({ userId, profile }: { userId: string; profile?: Pr
             <button
               type="button"
               className="composer-add-media"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={requestMediaSelection}
               disabled={busy || media.length >= POST_MEDIA_MAX_ITEMS}
+              aria-disabled={Boolean(poll) || undefined}
             >
               <ImagePlus aria-hidden="true" />
               Adicionar fotos
             </button>
-            <span className="composer-media-limit">{media.length}/{POST_MEDIA_MAX_ITEMS}</span>
+            {!poll && <span className="composer-media-limit">{media.length}/{POST_MEDIA_MAX_ITEMS}</span>}
+            <button
+              type="button"
+              className="composer-add-media"
+              onClick={addPoll}
+              disabled={busy || Boolean(poll)}
+              aria-disabled={media.length > 0 || undefined}
+            >
+              <ListChecks aria-hidden="true" />
+              Enquete
+            </button>
           </div>
           <div className="composer-submit-actions">
             <span className={`character-count ${remaining < 30 ? 'warning' : ''} ${remaining < 0 ? 'error' : ''}`}>

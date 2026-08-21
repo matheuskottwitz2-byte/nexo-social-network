@@ -5,8 +5,16 @@ import {
 } from '../lib/constants'
 import { supabase } from '../lib/supabase'
 import type { Json } from '../types/database'
-import type { Post, PostMedia, ProfileSummary } from '../types/models'
+import type {
+  CreatePollInput,
+  PollOption,
+  Post,
+  PostMedia,
+  PostPoll,
+  ProfileSummary,
+} from '../types/models'
 import { validatePostImageFile } from '../utils/imageProcessing'
+import { validatePollInput } from '../utils/polls'
 
 const POST_MEDIA_BUCKET = 'post-media'
 
@@ -32,6 +40,19 @@ type RawPost = {
   likes: { user_id: string }[] | null
   comments: { id: string }[] | null
 }
+type RawPollSummary = {
+  post_id: string
+  poll_id: string
+  question: string
+  expires_at: string
+  total_votes: number
+  viewer_option_id: string | null
+  options: Json
+}
+type RawVerifiedPoll = {
+  question: string
+  options: { option_text: string; position: number }[] | null
+}
 
 export interface CreatePostMediaInput {
   file: File
@@ -43,6 +64,12 @@ export interface CreatePostMediaInput {
 export interface CreatePostInput {
   content: string
   media: CreatePostMediaInput[]
+  poll: CreatePollInput | null
+}
+
+export interface VoteInPollInput {
+  pollId: string
+  optionId: string
 }
 
 export interface DeletePostInput {
@@ -112,18 +139,69 @@ function mapMedia(row: RawPost): PostMedia[] {
   }]
 }
 
-function mapPost(row: RawPost, viewerId: string): Post {
+function isJsonRecord(value: Json): value is { [key: string]: Json | undefined } {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function mapPollOption(value: Json): PollOption {
+  if (!isJsonRecord(value)) throw new Error('Uma opção da enquete possui formato inválido.')
+  const id = value.id
+  const text = value.text
+  const position = value.position
+  const voteCount = value.vote_count
+  if (
+    typeof id !== 'string' ||
+    typeof text !== 'string' ||
+    typeof position !== 'number' ||
+    typeof voteCount !== 'number'
+  ) {
+    throw new Error('Uma opção da enquete possui dados inválidos.')
+  }
+  return { id, text, position, voteCount }
+}
+
+function mapPoll(row: RawPollSummary): PostPoll {
+  if (!Array.isArray(row.options)) throw new Error('As opções da enquete não foram encontradas.')
+  return {
+    id: row.poll_id,
+    postId: row.post_id,
+    question: row.question,
+    expiresAt: row.expires_at,
+    totalVotes: Number(row.total_votes),
+    viewerOptionId: row.viewer_option_id,
+    options: row.options.map(mapPollOption).sort((left, right) => left.position - right.position),
+  }
+}
+
+async function getPollsByPostId(postIds: readonly string[]) {
+  if (postIds.length === 0) return new Map<string, PostPoll>()
+  const { data, error } = await supabase.rpc('get_poll_summaries', {
+    p_post_ids: [...new Set(postIds)],
+  })
+  if (error) throw error
+  return new Map(
+    ((data ?? []) as RawPollSummary[]).map((row) => [row.post_id, mapPoll(row)] as const),
+  )
+}
+
+function mapPost(row: RawPost, viewerId: string, poll: PostPoll | null): Post {
   return {
     id: row.id,
     authorId: row.author_id,
     content: row.content,
     media: mapMedia(row),
+    poll,
     createdAt: row.created_at,
     author: mapAuthor(row.author),
     likeCount: row.likes?.length ?? 0,
     commentCount: row.comments?.length ?? 0,
     likedByMe: row.likes?.some((like) => like.user_id === viewerId) ?? false,
   }
+}
+
+async function mapPosts(rows: RawPost[], viewerId: string): Promise<Post[]> {
+  const pollsByPostId = await getPollsByPostId(rows.map((row) => row.id))
+  return rows.map((row) => mapPost(row, viewerId, pollsByPostId.get(row.id) ?? null))
 }
 
 function postMediaExtension(mimeType: string) {
@@ -185,6 +263,21 @@ function samePaths(actual: readonly string[], expected: readonly string[]) {
   return orderedActual.every((path, index) => path === orderedExpected[index])
 }
 
+function singleRelation<T>(value: T | T[] | null): T | null {
+  return Array.isArray(value) ? value[0] ?? null : value
+}
+
+function samePoll(actual: RawVerifiedPoll | RawVerifiedPoll[] | null, expected: CreatePollInput | null) {
+  const poll = singleRelation(actual)
+  if (!expected) return poll === null
+  if (!poll || poll.question !== expected.question) return false
+  const actualOptions = [...(poll.options ?? [])]
+    .sort((left, right) => left.position - right.position)
+    .map((option) => option.option_text)
+  return actualOptions.length === expected.options.length &&
+    actualOptions.every((option, index) => option === expected.options[index])
+}
+
 export async function getFeed(viewerId: string, mode: 'all' | 'following'): Promise<Post[]> {
   let followedIds: string[] | null = null
   if (mode === 'following') {
@@ -198,7 +291,7 @@ export async function getFeed(viewerId: string, mode: 'all' | 'following'): Prom
   if (followedIds) query = query.in('author_id', followedIds)
   const { data, error } = await query
   if (error) throw error
-  return (data as unknown as RawPost[]).map((row) => mapPost(row, viewerId))
+  return mapPosts(data as unknown as RawPost[], viewerId)
 }
 
 export async function getPostsByAuthor(authorId: string, viewerId: string): Promise<Post[]> {
@@ -208,18 +301,27 @@ export async function getPostsByAuthor(authorId: string, viewerId: string): Prom
     .eq('author_id', authorId)
     .order('created_at', { ascending: false })
   if (error) throw error
-  return (data as unknown as RawPost[]).map((row) => mapPost(row, viewerId))
+  return mapPosts(data as unknown as RawPost[], viewerId)
 }
 
 export async function getPost(postId: string, viewerId: string): Promise<Post | null> {
   const { data, error } = await supabase.from('posts').select(postSelect).eq('id', postId).maybeSingle()
   if (error) throw error
-  return data ? mapPost(data as unknown as RawPost, viewerId) : null
+  if (!data) return null
+  return (await mapPosts([data as unknown as RawPost], viewerId))[0] ?? null
 }
 
 export async function createPost(authorId: string, input: CreatePostInput): Promise<string> {
   const content = input.content.trim()
-  if (!content && input.media.length === 0) throw new Error('Adicione texto ou pelo menos uma imagem.')
+  const pollValidation = input.poll ? validatePollInput(input.poll) : null
+  if (pollValidation && !pollValidation.valid) throw new Error(pollValidation.error)
+  const normalizedPoll = pollValidation?.valid ? pollValidation.poll : null
+  if (input.media.length > 0 && normalizedPoll) {
+    throw new Error('Uma publicação não pode combinar imagens e enquete nesta versão.')
+  }
+  if (!content && input.media.length === 0 && !normalizedPoll) {
+    throw new Error('Adicione texto, pelo menos uma imagem ou uma enquete válida.')
+  }
   if (content.length > POST_MAX_LENGTH) {
     throw new Error(`A publicação pode ter no máximo ${POST_MAX_LENGTH} caracteres.`)
   }
@@ -282,6 +384,13 @@ export async function createPost(authorId: string, input: CreatePostInput): Prom
     position: item.position,
     alt_text: item.altText,
   }))
+  const pollPayload: Json = normalizedPoll
+    ? {
+        question: normalizedPoll.question,
+        duration_minutes: normalizedPoll.durationMinutes,
+        options: normalizedPoll.options,
+      }
+    : null
   let data: string | null = null
   let error: unknown = null
   try {
@@ -289,6 +398,7 @@ export async function createPost(authorId: string, input: CreatePostInput): Prom
       p_post_id: postId,
       p_content: content,
       p_media: mediaPayload,
+      p_poll: pollPayload,
     })
     data = result.data
     error = result.error
@@ -300,7 +410,11 @@ export async function createPost(authorId: string, input: CreatePostInput): Prom
 
   const verification = await supabase
     .from('posts')
-    .select('id, author_id, content, media:post_media(storage_path)')
+    .select(`
+      id, author_id, content,
+      media:post_media(storage_path),
+      poll:polls(question, options:poll_options(option_text, position))
+    `)
     .eq('id', postId)
     .eq('author_id', authorId)
     .maybeSingle()
@@ -315,7 +429,11 @@ export async function createPost(authorId: string, input: CreatePostInput): Prom
     const verifiedMedia = (verification.data.media ?? []) as unknown as { storage_path: string }[]
     const creationWasCommitted =
       verification.data.content === content &&
-      samePaths(verifiedMedia.map((item) => item.storage_path), attemptedPaths)
+      samePaths(verifiedMedia.map((item) => item.storage_path), attemptedPaths) &&
+      samePoll(
+        verification.data.poll as unknown as RawVerifiedPoll | RawVerifiedPoll[] | null,
+        normalizedPoll,
+      )
     if (creationWasCommitted) return postId
   }
 
@@ -364,4 +482,21 @@ export async function setPostLiked(userId: string, postId: string, shouldLike: b
     ? await supabase.from('likes').insert({ user_id: userId, post_id: postId })
     : await supabase.from('likes').delete().eq('user_id', userId).eq('post_id', postId)
   if (result.error) throw result.error
+}
+
+export async function voteInPoll({ pollId, optionId }: VoteInPollInput): Promise<string> {
+  const { data, error } = await supabase.rpc('vote_in_poll', {
+    p_poll_id: pollId,
+    p_option_id: optionId,
+  })
+  if (error) {
+    const message = error.message.toLocaleLowerCase('pt-BR')
+    if (/expir|encerr|closed/.test(message)) throw new Error('Esta enquete já foi encerrada.', { cause: error })
+    if (error.code === '23505' || /already voted|já votou|duplicate/.test(message)) {
+      throw new Error('Você já votou nesta enquete.', { cause: error })
+    }
+    throw error
+  }
+  if (data !== optionId) throw new Error('O banco não confirmou o voto selecionado.')
+  return data
 }

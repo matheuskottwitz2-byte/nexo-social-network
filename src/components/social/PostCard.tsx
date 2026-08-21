@@ -2,13 +2,19 @@ import { Heart, MessageCircle, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { useDeletePost, useToggleLike } from '../../hooks/useNexoQueries'
+import {
+  useDeletePost,
+  useRefreshPostPoll,
+  useToggleLike,
+  useVoteInPoll,
+} from '../../hooks/useNexoQueries'
 import type { Post } from '../../types/models'
 import { getErrorMessage } from '../../utils/errors'
 import { compactNumber, formatFullDate, formatRelativeDate } from '../../utils/format'
 import { Avatar } from '../ui/Avatar'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { PostMediaGrid } from './PostMediaGrid'
+import { PostPoll } from './PostPoll'
 
 interface PostCardProps {
   post: Post
@@ -20,6 +26,8 @@ export function PostCard({ post, currentUserId, detail = false }: PostCardProps)
   const navigate = useNavigate()
   const likeMutation = useToggleLike()
   const deleteMutation = useDeletePost()
+  const voteMutation = useVoteInPoll()
+  const refreshPoll = useRefreshPostPoll()
   const [confirmOpen, setConfirmOpen] = useState(false)
 
   async function handleLike() {
@@ -79,6 +87,31 @@ export function PostCard({ post, currentUserId, detail = false }: PostCardProps)
           </Link>
         ))}
         <PostMediaGrid media={post.media} eager={detail} />
+        {post.poll && (
+          <PostPoll
+            poll={post.poll}
+            currentUserId={currentUserId}
+            onVote={async ({ pollId, optionId, userId }) => {
+              await voteMutation.mutateAsync({
+                pollId,
+                optionId,
+                userId,
+                postId: post.id,
+                authorId: post.authorId,
+              })
+            }}
+            onVoteError={(error) => {
+              toast.error(getErrorMessage(error, 'Não foi possível registrar seu voto.'))
+            }}
+            onExpire={() => {
+              void refreshPoll({
+                userId: currentUserId,
+                postId: post.id,
+                authorId: post.authorId,
+              })
+            }}
+          />
+        )}
         <footer className="post-actions">
           <button className={`post-action ${post.likedByMe ? 'liked' : ''}`} onClick={handleLike} disabled={likeMutation.isPending} aria-label={post.likedByMe ? 'Remover curtida' : 'Curtir'} aria-pressed={post.likedByMe}>
             <Heart className="size-5" fill={post.likedByMe ? 'currentColor' : 'none'} />
@@ -93,7 +126,7 @@ export function PostCard({ post, currentUserId, detail = false }: PostCardProps)
       <ConfirmDialog
         open={confirmOpen}
         title="Excluir publicação?"
-        description="Essa ação é permanente e a publicação, suas imagens, curtidas e comentários serão removidos."
+        description="Essa ação é permanente e a publicação, suas imagens, enquete, votos, curtidas e comentários serão removidos."
         loading={deleteMutation.isPending}
         onCancel={() => setConfirmOpen(false)}
         onConfirm={handleDelete}

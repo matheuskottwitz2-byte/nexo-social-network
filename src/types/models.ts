@@ -27,11 +27,37 @@ export interface PostMedia {
   altText: string | null
 }
 
+export type PollDurationMinutes = 60 | 360 | 1440 | 4320 | 10080
+
+export interface CreatePollInput {
+  question: string
+  options: string[]
+  durationMinutes: PollDurationMinutes
+}
+
+export interface PollOption {
+  id: string
+  text: string
+  position: number
+  voteCount: number
+}
+
+export interface PostPoll {
+  id: string
+  postId: string
+  question: string
+  expiresAt: string
+  totalVotes: number
+  viewerOptionId: string | null
+  options: PollOption[]
+}
+
 export interface Post {
   id: string
   authorId: string
   content: string
   media: PostMedia[]
+  poll: PostPoll | null
   createdAt: string
   author: ProfileSummary
   likeCount: number
